@@ -1,0 +1,54 @@
+[package]
+name = "bruteforcer"
+version = "0.1.0"
+edition = "2021"
+description = "A pluggable bruteforce framework. First target module: yopass (offline OpenPGP passphrase recovery)."
+license = "MIT"
+
+[[bin]]
+name = "bruteforcer"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+crossbeam-channel = "0.5"
+num_cpus = "1"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+indicatif = "0.17"
+
+# Manual v6-SKESK verification path (also the foundation for the GPU backend):
+# S2K (SHA-256) -> HKDF-SHA256 -> AES-256-GCM unwrap of the session key.
+sha2 = "0.10"
+hkdf = "0.12"
+aes-gcm = "0.10"
+
+# GPU backend (opt-in): pure-Rust compute via wgpu/WGSL. Off by default.
+wgpu = { version = "0.20", optional = true }
+pollster = { version = "0.3", optional = true }
+bytemuck = { version = "1", optional = true, features = ["derive"] }
+
+[features]
+default = []
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+# OpenPGP. Use the pure-Rust backend everywhere: it needs no system libraries
+# and, crucially, implements the RFC 9580 "crypto-refresh" AEAD modes (GCM/OCB/
+# EAX) that current yopass (OpenPGP.js) uses — SKESK v6 + SEIPD v2. The Windows
+# CNG backend in sequoia 1.22 does not parse v6 SKESK packets.
+[dependencies.sequoia-openpgp]
+version = "2.3"
+default-features = false
+features = ["crypto-rust", "compression", "allow-experimental-crypto", "allow-variable-time-crypto"]
+
+[[example]]
+name = "gpu_check"
+required-features = ["gpu"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

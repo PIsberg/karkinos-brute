@@ -1,0 +1,4 @@
+target/
+*.asc
+*.log
+!tests/fixtures/*.asc
