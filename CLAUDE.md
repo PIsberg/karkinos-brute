@@ -34,16 +34,20 @@ GPU tests auto-skip cleanly on machines with no GPU adapter, so `cargo test
 
 Three separated concerns (`src/lib.rs` documents the split):
 
-- **`engine::candidate`** — *where guesses come from.* The `CandidateSource`
-  trait is just a lazy iterator of `Vec<u8>`. `WordlistSource` (file, one per
-  line) and `MaskSpec` (an odometer over a charset × length range) implement it.
-  Masks stream lazily — never materialize the keyspace — so astronomically large
-  masks use O(1) memory. `total_hint()` returns `None` when the size is unknown
-  (stdin) or too large for a useful ETA.
+- **`engine::candidate`** — *where guesses come from.* `CandidateSource::next_candidate(&mut buf)`
+  fills a caller-owned buffer (returns `false` at exhaustion) rather than
+  returning a fresh `Vec`, so the runner can recycle one allocation per worker.
+  `WordlistSource` (file, one per line) and `MaskSpec` (an odometer over a
+  charset × length range) implement it. Masks stream lazily — never materialize
+  the keyspace — so astronomically large masks use O(1) memory. `total_hint()`
+  returns `None` when the size is unknown (stdin) or too large for a useful ETA.
 - **`engine::runner`** — *how guesses are dispatched.* `run()` is one producer
   thread feeding a **bounded** crossbeam channel (capacity `threads*256`, for
-  backpressure) and N workers. **Stop-on-hit** via an `AtomicBool`. Worker
-  semantics map directly to the `Target` contract below.
+  backpressure) and N workers. Spent candidate buffers cycle back via a second
+  bounded channel so the steady-state hot path allocates nothing. **Stop-on-hit**
+  via an `AtomicBool`. Workers batch progress into a thread-local counter, flushed
+  to the shared atomic every `PROGRESS_FLUSH` guesses. Worker semantics map
+  directly to the `Target` contract below.
 - **`target`** — *what a guess is tested against.* Implement `Target`
   (`Send + Sync`, the runner clones an `Arc<dyn Target>` into every worker):
   - `Ok(Some(plaintext))` → hit; the whole run stops.

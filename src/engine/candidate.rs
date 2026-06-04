@@ -15,7 +15,15 @@ use anyhow::{Context, Result};
 /// `total_hint` lets the runner render a progress bar/ETA when the size is known
 /// up front (masks); it returns `None` for unbounded/unknown sources (stdin).
 pub trait CandidateSource: Send {
-    fn next_candidate(&mut self) -> Option<Vec<u8>>;
+    /// Overwrite `buf` with the next candidate and return `true`. Return `false`
+    /// when the source is exhausted (leaving `buf`'s contents unspecified).
+    ///
+    /// Filling a caller-owned buffer — rather than returning a fresh `Vec` —
+    /// lets the runner recycle one allocation per worker instead of allocating
+    /// per guess (see [`crate::engine::runner`]). Implementations MUST clear
+    /// `buf` before writing, so a recycled buffer never leaks stale bytes into a
+    /// candidate.
+    fn next_candidate(&mut self, buf: &mut Vec<u8>) -> bool;
     /// Total number of candidates, if known cheaply and exactly.
     fn total_hint(&self) -> Option<u64> {
         None
@@ -28,7 +36,6 @@ pub trait CandidateSource: Send {
 /// Blank lines are skipped.
 pub struct WordlistSource {
     reader: BufReader<File>,
-    buf: Vec<u8>,
 }
 
 impl WordlistSource {
@@ -38,26 +45,28 @@ impl WordlistSource {
             File::open(path).with_context(|| format!("opening wordlist {}", path.display()))?;
         Ok(Self {
             reader: BufReader::new(file),
-            buf: Vec::with_capacity(64),
         })
     }
 }
 
 impl CandidateSource for WordlistSource {
-    fn next_candidate(&mut self) -> Option<Vec<u8>> {
+    fn next_candidate(&mut self, buf: &mut Vec<u8>) -> bool {
         loop {
-            self.buf.clear();
-            let n = self.reader.read_until(b'\n', &mut self.buf).ok()?;
+            buf.clear();
+            let n = match self.reader.read_until(b'\n', buf) {
+                Ok(n) => n,
+                Err(_) => return false,
+            };
             if n == 0 {
-                return None; // EOF
+                return false; // EOF
             }
-            while matches!(self.buf.last(), Some(b'\n' | b'\r')) {
-                self.buf.pop();
+            while matches!(buf.last(), Some(b'\n' | b'\r')) {
+                buf.pop();
             }
-            if self.buf.is_empty() {
+            if buf.is_empty() {
                 continue; // skip blank lines
             }
-            return Some(self.buf.clone());
+            return true;
         }
     }
 }
@@ -107,13 +116,14 @@ impl MaskSpec {
 }
 
 impl CandidateSource for MaskSpec {
-    fn next_candidate(&mut self) -> Option<Vec<u8>> {
+    fn next_candidate(&mut self, buf: &mut Vec<u8>) -> bool {
         if self.exhausted {
-            return None;
+            return false;
         }
         if !self.started {
             self.started = true;
-            return Some(self.render());
+            self.render(buf);
+            return true;
         }
         // Increment the odometer (least-significant position is the last index).
         let base = self.charset.len();
@@ -124,10 +134,11 @@ impl CandidateSource for MaskSpec {
                 self.cur_len += 1;
                 if self.cur_len > self.max_len {
                     self.exhausted = true;
-                    return None;
+                    return false;
                 }
                 self.indices = vec![0; self.cur_len];
-                return Some(self.render());
+                self.render(buf);
+                return true;
             }
             pos -= 1;
             self.indices[pos] += 1;
@@ -136,7 +147,8 @@ impl CandidateSource for MaskSpec {
             }
             self.indices[pos] = 0; // carry
         }
-        Some(self.render())
+        self.render(buf);
+        true
     }
 
     fn total_hint(&self) -> Option<u64> {
@@ -153,8 +165,9 @@ impl CandidateSource for MaskSpec {
 }
 
 impl MaskSpec {
-    fn render(&self) -> Vec<u8> {
-        self.indices.iter().map(|&i| self.charset[i]).collect()
+    fn render(&self, buf: &mut Vec<u8>) {
+        buf.clear();
+        buf.extend(self.indices.iter().map(|&i| self.charset[i]));
     }
 }
 
@@ -181,10 +194,44 @@ mod tests {
 
     fn collect(mut s: impl CandidateSource) -> Vec<String> {
         let mut out = Vec::new();
-        while let Some(c) = s.next_candidate() {
-            out.push(String::from_utf8(c).unwrap());
+        let mut buf = Vec::new();
+        while s.next_candidate(&mut buf) {
+            out.push(String::from_utf8(buf.clone()).unwrap());
         }
         out
+    }
+
+    /// Write `contents` to a uniquely-named temp file and return its path.
+    fn temp_wordlist(tag: &str, contents: &[u8]) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("karkinos_brute_wl_{}_{}.txt", std::process::id(), tag));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn wordlist_strips_crlf_and_skips_blank_lines() {
+        // Mixed CRLF/LF endings and blank lines (both kinds) must be normalized.
+        let p = temp_wordlist("crlf", b"alpha\r\nbeta\n\n\r\ngamma\n");
+        let got = collect(WordlistSource::open(&p).unwrap());
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(got, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn wordlist_handles_missing_trailing_newline() {
+        let p = temp_wordlist("notrail", b"first\nsecond");
+        let got = collect(WordlistSource::open(&p).unwrap());
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(got, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn wordlist_empty_file_yields_nothing() {
+        let p = temp_wordlist("empty", b"");
+        let got = collect(WordlistSource::open(&p).unwrap());
+        let _ = std::fs::remove_file(&p);
+        assert!(got.is_empty());
     }
 
     #[test]

@@ -349,23 +349,31 @@ pub fn crack_v6(
     };
 
     let _start = Instant::now();
-    let mut buf: Vec<Vec<u8>> = Vec::with_capacity(batch);
+    // Reuse the inner buffers across batches: `next_candidate` overwrites each in
+    // place, so after the first batch this loop performs no per-guess allocation.
+    let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(batch);
     loop {
-        // Fill a batch from the candidate source.
-        buf.clear();
-        while buf.len() < batch {
-            match source.next_candidate() {
-                Some(c) => buf.push(c),
-                None => break,
+        // Fill a batch from the candidate source, growing the pool only until it
+        // reaches `batch` buffers, then refilling those same allocations.
+        let mut filled = 0usize;
+        while filled < batch {
+            if filled == bufs.len() {
+                bufs.push(Vec::with_capacity(64));
+            }
+            if source.next_candidate(&mut bufs[filled]) {
+                filled += 1;
+            } else {
+                break;
             }
         }
-        if buf.is_empty() {
+        if filled == 0 {
             break; // exhausted
         }
+        let active = &bufs[..filled];
 
         // GPU handles passphrases up to 64 bytes; longer ones go to the CPU.
-        let keys = gpu.derive_batch(&buf)?;
-        for (i, cand) in buf.iter().enumerate() {
+        let keys = gpu.derive_batch(active)?;
+        for (i, cand) in active.iter().enumerate() {
             let hit = if cand.len() > 64 {
                 skesk.verify(cand).is_some()
             } else {
@@ -379,7 +387,10 @@ pub fn crack_v6(
             }
         }
         if let Some(pb) = &pb {
-            pb.inc(buf.len() as u64);
+            pb.inc(filled as u64);
+        }
+        if filled < batch {
+            break; // source exhausted mid-batch
         }
     }
     if let Some(pb) = &pb {
