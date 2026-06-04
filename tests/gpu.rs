@@ -63,8 +63,15 @@ fn gpu_s2k_matches_cpu_reference() {
 /// A tiny in-memory candidate source for driving `crack_v6`.
 struct VecSource(std::vec::IntoIter<Vec<u8>>);
 impl CandidateSource for VecSource {
-    fn next_candidate(&mut self) -> Option<Vec<u8>> {
-        self.0.next()
+    fn next_candidate(&mut self, buf: &mut Vec<u8>) -> bool {
+        match self.0.next() {
+            Some(c) => {
+                buf.clear();
+                buf.extend_from_slice(&c);
+                true
+            }
+            None => false,
+        }
     }
 }
 
