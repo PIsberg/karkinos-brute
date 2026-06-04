@@ -1,0 +1,117 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A pluggable offline brute-force **framework** in Rust (authorized security testing
+only). The engine is target-agnostic; each attack is one `Target` impl. The only
+bundled target is `yopass` — offline recovery of a weak *custom password* on a
+yopass secret's OpenPGP ciphertext.
+
+> The repo is `karkinos-brute` but the crate, binary, and library are still named
+> `bruteforcer` (see `Cargo.toml`). CLI invocations and `use bruteforcer::...`
+> paths use that name — don't "fix" them to match the repo without renaming the
+> package everywhere.
+
+## Commands
+
+```sh
+cargo build --release        # ALWAYS use --release for real cracking — debug is
+                             # several times slower (S2K dominates runtime)
+cargo test                   # CPU paths: vectors.rs + candidate unit tests
+cargo test --features gpu    # also GPU S2K == CPU reference + crack_v6 end-to-end
+cargo test mask_length_range # run a single test by name substring
+
+cargo build --release --features gpu          # build with the opt-in GPU backend
+cargo run --example inspect -- secret.asc [pw] # dump OpenPGP packets / try a decrypt
+```
+
+GPU tests auto-skip cleanly on machines with no GPU adapter, so `cargo test
+--features gpu` is safe in any environment.
+
+## Architecture
+
+Three separated concerns (`src/lib.rs` documents the split):
+
+- **`engine::candidate`** — *where guesses come from.* The `CandidateSource`
+  trait is just a lazy iterator of `Vec<u8>`. `WordlistSource` (file, one per
+  line) and `MaskSpec` (an odometer over a charset × length range) implement it.
+  Masks stream lazily — never materialize the keyspace — so astronomically large
+  masks use O(1) memory. `total_hint()` returns `None` when the size is unknown
+  (stdin) or too large for a useful ETA.
+- **`engine::runner`** — *how guesses are dispatched.* `run()` is one producer
+  thread feeding a **bounded** crossbeam channel (capacity `threads*256`, for
+  backpressure) and N workers. **Stop-on-hit** via an `AtomicBool`. Worker
+  semantics map directly to the `Target` contract below.
+- **`target`** — *what a guess is tested against.* Implement `Target`
+  (`Send + Sync`, the runner clones an `Arc<dyn Target>` into every worker):
+  - `Ok(Some(plaintext))` → hit; the whole run stops.
+  - `Ok(None)` → clean miss (the common case — wrong password).
+  - `Err(_)` → **fatal**, aborts the entire run. A wrong passphrase must be
+    `Ok(None)`, never `Err`; reserve `Err` for malformed ciphertext / I/O, since
+    a target that errors per-candidate would otherwise burn the whole keyspace.
+
+Adding a new attack = a new `Target` impl + a clap subcommand wired in
+`main.rs`; the engine is reused unchanged.
+
+### yopass: two decryption paths for the same ciphertext
+
+yopass encrypts client-side with OpenPGP **symmetric** (passphrase → key via
+salted+iterated S2K). There are two independent verification paths:
+
+1. **General path** (`target/yopass.rs`, `YopassTarget`) — drives **sequoia-openpgp**
+   with a passphrase-only `DecryptionHelper`. Handles any OpenPGP symmetric
+   message. This is the default CPU engine.
+2. **Manual v6 fast path** (`target/skesk_v6.rs`, `SkeskV6`) — hand-rolled decode +
+   verify of an **RFC 9580 v6 SKESK / AES-256 / GCM** packet (S2K → HKDF-SHA256 →
+   AES-256-GCM tag check). Deliberately independent of sequoia because it is the
+   exact oracle the GPU backend reproduces. Returns `UnsupportedSkesk` for v4 /
+   non-AES-256 / non-GCM, so callers fall back to path 1.
+
+The **GPU backend** (`src/gpu/`, `--features gpu`) offloads only the expensive S2K
+(`SHA256` over `count` octets of `salt||pass`) to a WGSL compute shader; HKDF +
+the AEAD tag check stay on the CPU using `SkeskV6`. `main.rs::yopass_crack` tries
+the GPU path first when `--gpu` is set, falls back to the CPU engine if the SKESK
+isn't on the v6 fast path or the binary was built without the feature. The S2K is
+split into watchdog-safe chunks so long iteration counts don't trip the OS GPU
+timeout (TDR).
+
+### Critical OpenPGP constraint
+
+Current yopass (OpenPGP.js) emits **v6 SKESK + SEIPD v2 AEAD (AES-256/GCM, RFC
+9580)**. This *requires* `sequoia-openpgp` 2.x with the **pure-Rust backend**
+(`crypto-rust`, set in `Cargo.toml`). sequoia 1.x and the Windows CNG backend do
+**not** parse v6 SKESK and will reject real yopass blobs. Do not switch the
+sequoia backend. The pure-Rust backend also needs no system libraries, so the
+build is self-contained on all platforms.
+
+`ensure_passphrase_encrypted` gates on the packet **`Tag::SKESK`**, not the
+`Packet::SKESK` variant, because sequoia 2.x surfaces a v6 SKESK as
+`Packet::Unknown` (carrying the right tag) at the top level while still decrypting
+it correctly.
+
+## Operational notes for the yopass target
+
+- **One-time secrets.** `GET /secret/{uuid}` *consumes* (deletes) a one-time
+  secret. `obtain_ciphertext` always saves a `<uuid>.asc` backup immediately
+  after fetching so a failed crack doesn't lose the only copy. Crack the saved
+  blob with `--message`; never re-fetch in a loop.
+- **Public-instance host split.** `yopass.se` / `share.yopass.se` / `www.yopass.se`
+  are static frontends; the real API is `https://api.yopass.se`.
+  `apply_api_base` auto-corrects this; `--api-base`/`--server` overrides it.
+- An `#/s/<uuid>/<key>` share URL embeds the key → decrypt directly, no brute
+  force. Only `#/c/<uuid>` (custom password) is crackable.
+
+## Tests / fixtures
+
+`tests/fixtures/` holds **real captured ciphertexts** used as known-answer
+regression vectors: `yopass_v6_gcm.asc` (v6 SKESK/AES-256/GCM → `fasfd`) and
+`openpgp_v4.asc` (gpg SEIPD+MDC → `v4 symmetric secret`). `vectors.rs` asserts
+both the v6 fast path and the general sequoia path recover the exact plaintext,
+and that v4 correctly falls off the fast path. The fixtures are deliberately
+un-ignored in `.gitignore` (`!tests/fixtures/*.asc`).
+
+> `.gitignore` uses **`/target/`** (root-anchored) so the build dir is ignored
+> but the `src/target/` source module is not. An unanchored `target/` rule would
+> silently swallow the source — keep the leading slash.
