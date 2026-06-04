@@ -1,4 +1,4 @@
-# bruteforcer
+# karkinos-brute
 
 A small, pluggable bruteforce **framework** in Rust. The engine (candidate
 generation + parallel dispatch) is target-agnostic; each attack is a module that
