@@ -1,5 +1,10 @@
 # karkinos-brute
 
+[![CI](https://github.com/PIsberg/karkinos-brute/actions/workflows/ci.yml/badge.svg)](https://github.com/PIsberg/karkinos-brute/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey.svg)](#)
+
 A small, pluggable bruteforce **framework** in Rust. The engine (candidate
 generation + parallel dispatch) is target-agnostic; each attack is a module that
 implements one trait. The first bundled module targets
