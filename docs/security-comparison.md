@@ -1,22 +1,39 @@
-# Which target is harder to crack? (yopass vs PrivateBin)
+# Which target is hardest to crack? (yopass vs PrivateBin vs PasswordPusher)
 
-A comparison of the two bundled targets *from a crackability standpoint* — i.e.
-how well each service resists an offline attacker trying to recover a weak,
-human-chosen password. Both services hide a strong random key somewhere and (in
-the relevant mode) layer a human password on top; the password is the only thing
-ever worth brute-forcing. So the question splits into two independent axes:
+A comparison of the three bundled targets *from a crackability standpoint* — how
+well each service resists an attacker trying to recover a weak, human-chosen
+password/passphrase.
+
+The three split into **two architectures**, and that split matters more than any
+KDF detail:
+
+- **yopass and PrivateBin are zero-knowledge** (encrypt client-side; the password
+  feeds a KDF into the decryption key). They hide a strong random key somewhere
+  and *optionally* layer a human password on top. The attack is **offline**:
+  download the blob once, crack the password locally. Below they're compared on
+  two axes — cost per guess, and threat model.
+- **PasswordPusher is server-side-trust** (encrypts at rest under a server key;
+  the passphrase is a server-side string compare). There is **no offline
+  artifact** — the attack, if any, is **online**. It's analysed separately at the
+  end because the two axes below don't even apply to it.
+
+For the two zero-knowledge targets the question splits into two independent axes:
 
 1. **Cost per guess** — how expensive is one password attempt (the KDF work factor)?
 2. **Can the attack be mounted at all** — what does an attacker need to *have*
    before per-guess cost even matters (the threat model / where the key lives)?
 
-**TL;DR — PrivateBin is the stronger of the two.** The per-guess cost is roughly
-equal (yopass is marginally higher), but PrivateBin wins decisively on the threat
-model: its 256-bit key lives only in the URL fragment and never reaches the
-server, so a stolen/leaked ciphertext is uncrackable *regardless of password
-strength*, and its default paste has no crackable password at all. yopass's
-custom-password mode makes the password the **sole** secret, so the stored blob
-alone is offline-crackable whenever that password is weak.
+**TL;DR.** Among the zero-knowledge pair, **PrivateBin beats yopass**: per-guess
+cost is roughly equal (yopass marginally higher), but PrivateBin's 256-bit key
+lives only in the URL fragment and never reaches the server, so a leaked
+ciphertext is uncrackable *regardless of password strength*, and its default
+paste has no crackable password at all. yopass's custom-password mode makes the
+password the **sole** secret, so the stored blob alone is offline-crackable
+whenever that password is weak. **PasswordPusher is in a different category** —
+nothing is offline-crackable at all, which is a real strength against a *thief who
+steals data*, but it's purchased by trusting the server (which can read every
+secret) and by reducing any passphrase attack to a noisy, logged, rate-limited
+*online* one.
 
 ## Axis 1 — Cost per guess (KDF work factor)
 
@@ -71,16 +88,59 @@ can offline-crack it directly from the stored ciphertext.
 > password to crack** — so it isn't a target here. The crackable yopass mode is
 > specifically `/c/`, which trades the URL key away for a human password.
 
+## PasswordPusher — a different architecture (server-side trust)
+
+PasswordPusher doesn't fit the two axes above because it isn't zero-knowledge.
+The browser sends the secret to the server *in the clear* (over TLS); the server
+encrypts it **at rest** with AES-256-GCM (via the Lockbox gem) under a random
+256-bit master key it holds (`PWPUSH_MASTER_KEY`). The optional passphrase is
+**not** a KDF input — the server stores it and does a constant-time string compare
+on retrieval (`ActiveSupport::SecurityUtils.secure_compare`).
+
+| | PasswordPusher | yopass / PrivateBin (zero-knowledge) |
+|---|---|---|
+| Where encryption happens | server, at rest | client, in the browser |
+| Key derivation from the human secret? | **No** — random server master key | Yes — S2K / PBKDF2 → AES key |
+| Offline-crackable artifact exists? | **No** | Yes (the downloaded blob) |
+| Passphrase check | server-side string compare | local AEAD-tag verify |
+| Attack on a weak passphrase | **online only** — one HTTP request/guess | offline, math-only |
+| Server can read the secret? | **Yes** | No |
+
+What this buys, and what it costs:
+
+- **Strong against a data thief.** An attacker who steals the database (or a
+  single stored row) gets ciphertext encrypted under a 256-bit random key, not a
+  human password — uncrackable. There is no offline attack on the passphrase at
+  all, because the passphrase never touches the ciphertext.
+- **Weak against the server, and against online guessing.** The server holds the
+  master key and therefore *can decrypt every secret* — you are trusting the
+  operator (and their host, backups, and logs), exactly the trust a
+  zero-knowledge design removes. And the passphrase, where used, is only as strong
+  as an **online** attack makes it: each guess is a logged HTTP request that a
+  rate-limiter, alerting, and view limits all push back on.
+
+So for the *crack tool* PasswordPusher is the **least crackable** in the offline
+sense (nothing to crack), but that strength is conditional on trusting the server
+— a different promise from yopass/PrivateBin, not a strictly stronger one. Our
+[`pwpush`](pwpush.md) target therefore can only mount the **online** passphrase
+attack, against a server you are authorized to test.
+
 ## Overall verdict
 
-**PrivateBin has the best security from a crackable perspective.**
+**Among the two zero-knowledge targets, PrivateBin has the best security from a
+crackable perspective; PasswordPusher sits in a separate category.**
 
-- **Axis 1 (per-guess cost): ~tie**, marginal edge to yopass (~1,140 vs ~1,000
-  guesses/sec; neither memory-hard).
-- **Axis 2 (threat model): PrivateBin wins clearly** — the high-entropy key never
-  reaches the server, so a leaked ciphertext is uncrackable regardless of password
-  strength, and the default paste exposes no password at all. yopass `/c/` makes a
-  weak password the single point of failure against anyone holding the blob.
+- **Zero-knowledge pair — Axis 1 (per-guess cost): ~tie**, marginal edge to
+  yopass (~1,140 vs ~1,000 guesses/sec; neither memory-hard).
+- **Zero-knowledge pair — Axis 2 (threat model): PrivateBin wins clearly** — the
+  high-entropy key never reaches the server, so a leaked ciphertext is uncrackable
+  regardless of password strength, and the default paste exposes no password at
+  all. yopass `/c/` makes a weak password the single point of failure against
+  anyone holding the blob.
+- **PasswordPusher: no offline crack exists**, which is the strongest possible
+  answer to "can a leaked blob be cracked?" (no) — but it's bought by trusting the
+  server with the plaintext and by reducing any passphrase attack to a noisy,
+  rate-limited online one. Strong against thieves, weak against the operator.
 
 ### Practical guidance
 
@@ -94,3 +154,9 @@ can offline-crack it directly from the stored ciphertext.
 - **Operators** worried about server compromise should note that only PrivateBin
   (and yopass `/s/`) keep the decryption key off the server; yopass `/c/` blobs
   are offline-crackable if exfiltrated.
+- **PasswordPusher** is a good fit when you want central control, audit logs, and
+  expiry/burn enforcement and you trust the operator — but understand that the
+  server can read your secrets. If you instead want "even the operator can't read
+  it," choose a zero-knowledge tool. If you use a PasswordPusher passphrase, it
+  defends only against *online* guessing, so rely on the unguessable URL token and
+  the server's rate-limiting rather than a short passphrase.

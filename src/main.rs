@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Args, Parser, Subcommand};
@@ -16,6 +17,7 @@ use bruteforcer::engine::runner::{run, Outcome, RunConfig};
 use bruteforcer::target::privatebin::{
     decode_paste_key, fetch_paste, PasteLocation, PrivatebinTarget,
 };
+use bruteforcer::target::pwpush::{PushLocation, PwpushTarget};
 use bruteforcer::target::yopass::{fetch_ciphertext, SecretLocation, YopassTarget};
 use bruteforcer::target::Target;
 
@@ -37,6 +39,11 @@ enum Command {
     Privatebin {
         #[command(subcommand)]
         action: PrivatebinAction,
+    },
+    /// PasswordPusher (ONLINE passphrase recovery against a server you control).
+    Pwpush {
+        #[command(subcommand)]
+        action: PwpushAction,
     },
 }
 
@@ -106,6 +113,49 @@ enum PrivatebinAction {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum PwpushAction {
+    /// Recover a weak push *passphrase* by guessing ONLINE against the server.
+    ///
+    /// PasswordPusher has no offline-crackable artifact (the passphrase is a
+    /// server-side string compare, the payload is encrypted under a server key),
+    /// so every candidate is one HTTP request. Authorized targets only.
+    Crack {
+        #[command(flatten)]
+        source: PwCrackInput,
+        #[command(flatten)]
+        candidates: CandidateArgs,
+        /// Worker threads. This is an online attack — keep it low.
+        #[arg(short, long, default_value_t = 1)]
+        threads: usize,
+        /// Minimum delay between requests, in ms (politeness / rate-limit
+        /// avoidance). Use 0 for a localhost instance you own.
+        #[arg(long, default_value_t = 100)]
+        delay_ms: u64,
+        /// Disable the progress display.
+        #[arg(long)]
+        no_progress: bool,
+        /// Write the recovered secret here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Input for cracking a PasswordPusher passphrase. There is no saved-blob mode:
+/// the only oracle is a live server holding the push.
+#[derive(Args)]
+struct PwCrackInput {
+    /// Full push URL, e.g. https://host/p/<token> (a server you may test).
+    #[arg(long, group = "pwsrc")]
+    url: Option<String>,
+    /// Push token (use with --server).
+    #[arg(long, group = "pwsrc", requires = "server")]
+    token: Option<String>,
+    /// Server base URL (use with --token), e.g. http://localhost:5100
+    #[arg(long)]
+    server: Option<String>,
 }
 
 /// Input for cracking a PrivateBin paste. The decryption key (URL fragment) is
@@ -210,6 +260,16 @@ fn main() -> Result<()> {
                 no_progress,
                 out,
             } => privatebin_crack(source, candidates, threads, no_progress, out),
+        },
+        Command::Pwpush { action } => match action {
+            PwpushAction::Crack {
+                source,
+                candidates,
+                threads,
+                delay_ms,
+                no_progress,
+                out,
+            } => pwpush_crack(source, candidates, threads, delay_ms, no_progress, out),
         },
     }
 }
@@ -537,6 +597,51 @@ fn pb_obtain(source: &PbCrackInput) -> Result<(Vec<u8>, Vec<u8>)> {
         eprintln!("⚠️  This paste was burn-after-reading: it is now consumed.");
     }
     Ok((json, key))
+}
+
+fn pwpush_crack(
+    source: PwCrackInput,
+    candidates: CandidateArgs,
+    threads: usize,
+    delay_ms: u64,
+    no_progress: bool,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    // Locate the push (full URL, or server + token). No public default host:
+    // the user must name the instance they are authorized to test.
+    let loc = if let Some(url) = &source.url {
+        PushLocation::from_share_url(url)?
+    } else if let (Some(token), Some(server)) = (&source.token, &source.server) {
+        PushLocation::from_parts(server, token)?
+    } else {
+        bail!("provide --url, or both --token and --server");
+    };
+
+    eprintln!("⚠️  ONLINE ATTACK. PasswordPusher has no offline-crackable artifact, so every");
+    eprintln!("    candidate is a live HTTP request to the server. Run this ONLY against an");
+    eprintln!("    instance you are authorized to test (e.g. your own self-hosted server).");
+    eprintln!("    • Wrong guesses are logged server-side as failed-passphrase events.");
+    eprintln!("    • A correct guess COUNTS AS A VIEW and may delete a view-limited push.");
+    eprintln!("    Target: {}", loc.endpoint());
+
+    let target = Arc::new(PwpushTarget::new(&loc, Duration::from_millis(delay_ms)));
+    let source_box = build_candidate_source(&candidates)?;
+    let cfg = RunConfig {
+        threads: threads.max(1),
+        progress: !no_progress,
+    };
+    eprintln!(
+        "Guessing passphrase with {} thread(s), {} ms min delay between requests...",
+        cfg.threads, delay_ms
+    );
+
+    match run(target, source_box, cfg)? {
+        Outcome::Found { candidate, secret } => {
+            eprintln!("\n✅ Passphrase found: {}", String::from_utf8_lossy(&candidate));
+            emit_secret(&secret, out)
+        }
+        Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
+    }
 }
 
 fn build_candidate_source(args: &CandidateArgs) -> Result<Box<dyn CandidateSource>> {

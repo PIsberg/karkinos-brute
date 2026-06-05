@@ -4,6 +4,7 @@
 //! [`Target`] and the generic engine will drive it.
 
 pub mod privatebin;
+pub mod pwpush;
 pub mod skesk_v6;
 pub mod yopass;
 
