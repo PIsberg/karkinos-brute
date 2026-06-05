@@ -44,6 +44,12 @@ bruteforcer yopass     crack --message secret.asc --wordlist rockyou.txt
 bruteforcer privatebin crack --url "https://privatebin.net/?<id>#<key>" --charset digits --max 6
 ```
 
+**Which is harder to crack?** See [`docs/security-comparison.md`](docs/security-comparison.md)
+— short version: comparable per-guess cost, but PrivateBin is stronger overall
+because its high-entropy key never reaches the server (a leaked ciphertext is
+uncrackable regardless of password), whereas a weak yopass `/c/` custom password
+is the sole secret protecting the stored blob.
+
 ## Architecture
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design. In short:
