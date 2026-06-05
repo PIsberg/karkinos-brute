@@ -2,9 +2,10 @@
 
 `karkinos-brute` is a small, pluggable **offline brute-force framework** in Rust.
 The engine (candidate generation + parallel dispatch) is target-agnostic; each
-attack is a module that implements one trait. The only bundled target is
-`yopass` — offline recovery of a weak *custom password* on a yopass secret's
-OpenPGP ciphertext.
+attack is a module that implements one trait. Bundled targets: `yopass`
+(offline recovery of a weak *custom password* on a yopass OpenPGP secret; see
+[`yopass.md`](yopass.md)) and `privatebin` (a weak paste password on a
+PrivateBin v2 paste; see [`privatebin.md`](privatebin.md)).
 
 > The crate, binary, and library are named `bruteforcer` even though the repo is
 > `karkinos-brute`. CLI examples and `use bruteforcer::...` paths use that name.

@@ -3,6 +3,7 @@
 //! A target is anything a candidate guess can be tested against. Implement
 //! [`Target`] and the generic engine will drive it.
 
+pub mod privatebin;
 pub mod skesk_v6;
 pub mod yopass;
 

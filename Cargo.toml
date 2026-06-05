@@ -26,6 +26,13 @@ sha2 = "0.10"
 hkdf = "0.12"
 aes-gcm = "0.10"
 
+# PrivateBin target: PBKDF2-HMAC-SHA256 -> AES-256-GCM tag check, base58 URL
+# key, base64 wire fields, and (raw) DEFLATE for the recovered plaintext.
+pbkdf2 = "0.12"
+base64 = "0.22"
+bs58 = "0.5"
+flate2 = "1"
+
 # GPU backend (opt-in): pure-Rust compute via wgpu/WGSL. Off by default.
 wgpu = { version = "0.20", optional = true }
 pollster = { version = "0.3", optional = true }
