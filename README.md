@@ -190,6 +190,41 @@ discrete GPU (Intel Arc A370M) reached **~1,660 guesses/sec** vs the CPU's
 **~1,140** — only ~1.5×. On a high-end discrete GPU the margin is far larger.
 Benchmark your own hardware before assuming `--gpu` is faster.
 
+## PrivateBin target
+
+[PrivateBin](https://github.com/PrivateBin/PrivateBin) is a zero-knowledge
+pastebin: the browser encrypts client-side and the server stores only ciphertext.
+A paste is addressed by an **id** (URL query) and decrypted with a random 256-bit
+**paste key** that lives in the URL **fragment** (base58):
+`https://privatebin.net/?<id>#<base58key>`.
+
+Format v2 crypto: `key = paste_key ‖ utf8(password)` → **PBKDF2-HMAC-SHA256**
+(100k iterations, 8-byte salt) → **AES-256-GCM** (16-byte IV, 128-bit tag) with
+the `adata` metadata array as the AEAD additional data. The GCM tag is the crack
+oracle, so a wrong password is a clean miss — exactly the `Target` contract.
+
+**What's attackable.** With no password the paste key alone (in the link)
+decrypts it — nothing to brute-force. The pentest case, like yopass's custom
+password, is a paste with a *weak password layered on top of the link*: you hold
+the URL key and recover the password offline.
+
+```sh
+# Crack a password-protected paste (the URL carries the key; brute the password):
+bruteforcer privatebin crack \
+  --url "https://privatebin.net/?<id>#<base58key>" \
+  --charset digits --min 1 --max 6
+
+# Or fetch once, then crack the saved blob offline (pastes can be burn-after-read):
+bruteforcer privatebin fetch --url "https://privatebin.net/?<id>#<key>" -o paste.json
+bruteforcer privatebin crack --message paste.json --key <base58key> --wordlist rockyou.txt
+```
+
+> The recovered secret is PrivateBin's inner message JSON (`{"paste":"..."}`).
+> `scripts/privatebin_create.mjs` creates a real paste on a chosen instance for
+> end-to-end testing; `scripts/privatebin_vector.mjs` regenerates the
+> known-answer test fixture using Node WebCrypto (an implementation independent
+> of this crate).
+
 ## Architecture
 
 ```

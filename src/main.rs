@@ -13,6 +13,9 @@ use clap::{ArgGroup, Args, Parser, Subcommand};
 
 use bruteforcer::engine::candidate::{named_charset, CandidateSource, MaskSpec, WordlistSource};
 use bruteforcer::engine::runner::{run, Outcome, RunConfig};
+use bruteforcer::target::privatebin::{
+    decode_paste_key, fetch_paste, PasteLocation, PrivatebinTarget,
+};
 use bruteforcer::target::yopass::{fetch_ciphertext, SecretLocation, YopassTarget};
 use bruteforcer::target::Target;
 
@@ -29,6 +32,11 @@ enum Command {
     Yopass {
         #[command(subcommand)]
         action: YopassAction,
+    },
+    /// PrivateBin zero-knowledge pastebin.
+    Privatebin {
+        #[command(subcommand)]
+        action: PrivatebinAction,
     },
 }
 
@@ -66,6 +74,59 @@ enum YopassAction {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+// Subcommand enums are parsed once at startup; the size gap between the tiny
+// `Fetch` and the option-heavy `Crack` doesn't matter here.
+#[allow(clippy::large_enum_variant)]
+enum PrivatebinAction {
+    /// Download a paste's ciphertext JSON (may consume burn-after-reading pastes!).
+    Fetch {
+        /// Full share URL, e.g. https://privatebin.net/?<id>#<base58key>
+        #[arg(long)]
+        url: String,
+        /// Write the paste JSON here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Recover a weak paste password offline (the URL key is known).
+    Crack {
+        #[command(flatten)]
+        source: PbCrackInput,
+        #[command(flatten)]
+        candidates: CandidateArgs,
+        /// Worker threads (default: number of CPUs).
+        #[arg(short, long)]
+        threads: Option<usize>,
+        /// Disable the progress display.
+        #[arg(long)]
+        no_progress: bool,
+        /// Write the recovered secret here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Input for cracking a PrivateBin paste. The decryption key (URL fragment) is
+/// always required — we brute-force the *password* layered on top of it.
+#[derive(Args)]
+struct PbCrackInput {
+    /// Full share URL incl. the `#<key>` fragment (fetches the paste).
+    #[arg(long, group = "pbsrc")]
+    url: Option<String>,
+    /// Read a saved paste JSON from this file ('-' for stdin). Needs --key.
+    #[arg(long, group = "pbsrc", requires = "key")]
+    message: Option<String>,
+    /// Paste id (use with --server). Needs --key.
+    #[arg(long, group = "pbsrc", requires = "server", requires = "key")]
+    id: Option<String>,
+    /// Server base URL (use with --id).
+    #[arg(long)]
+    server: Option<String>,
+    /// Base58 paste key from the URL fragment (required for --message/--id).
+    #[arg(long)]
+    key: Option<String>,
 }
 
 /// How to locate a secret on a yopass server (for `fetch`).
@@ -139,6 +200,16 @@ fn main() -> Result<()> {
                 gpu_batch,
                 out,
             } => yopass_crack(source, candidates, threads, no_progress, gpu, gpu_batch, out),
+        },
+        Command::Privatebin { action } => match action {
+            PrivatebinAction::Fetch { url, out } => privatebin_fetch(url, out),
+            PrivatebinAction::Crack {
+                source,
+                candidates,
+                threads,
+                no_progress,
+                out,
+            } => privatebin_crack(source, candidates, threads, no_progress, out),
         },
     }
 }
@@ -365,6 +436,107 @@ fn try_gpu_crack(
 ) -> Result<Option<Option<Vec<u8>>>> {
     eprintln!("⚠️  built without GPU support (rebuild with `--features gpu`); using CPU engine.");
     Ok(None)
+}
+
+fn privatebin_fetch(url: String, out: Option<PathBuf>) -> Result<()> {
+    let loc = PasteLocation::from_share_url(&url)?;
+    eprintln!(
+        "⚠️  Fetching paste {} — PrivateBin pastes may be burn-after-reading; this can DELETE it server-side.",
+        loc.id
+    );
+    let (json, burn) = fetch_paste(&loc)?;
+    if burn {
+        eprintln!("⚠️  This paste is burn-after-reading: it is now consumed. Save this blob!");
+    }
+    match out {
+        Some(path) => {
+            fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))?;
+            eprintln!("Saved paste JSON to {}", path.display());
+        }
+        None => std::io::stdout().lock().write_all(&json)?,
+    }
+    Ok(())
+}
+
+fn privatebin_crack(
+    source: PbCrackInput,
+    candidates: CandidateArgs,
+    threads: Option<usize>,
+    no_progress: bool,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    // 1. Obtain the paste JSON and the (always-required) URL key.
+    let (paste_json, key) = pb_obtain(&source)?;
+
+    let target = Arc::new(PrivatebinTarget::from_paste_json(&paste_json, key)?);
+
+    // 2. Brute-force the password layered on top of the URL key.
+    let source_box = build_candidate_source(&candidates)?;
+    let cfg = RunConfig {
+        threads: threads.unwrap_or_else(|| num_cpus::get().max(1)),
+        progress: !no_progress,
+    };
+    eprintln!(
+        "Cracking with {} threads against target '{}'...",
+        cfg.threads,
+        target.name()
+    );
+
+    match run(target, source_box, cfg)? {
+        Outcome::Found { candidate, secret } => {
+            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            emit_secret(&secret, out)
+        }
+        Outcome::Exhausted => bail!("keyspace exhausted; no candidate matched"),
+    }
+}
+
+/// Resolve a PrivateBin crack source into (paste JSON bytes, decoded key bytes).
+fn pb_obtain(source: &PbCrackInput) -> Result<(Vec<u8>, Vec<u8>)> {
+    // Saved blob: needs an explicit --key (enforced by clap `requires`).
+    if let Some(message) = &source.message {
+        let bytes = if message == "-" {
+            let mut buf = Vec::new();
+            std::io::stdin()
+                .lock()
+                .read_to_end(&mut buf)
+                .context("reading paste JSON from stdin")?;
+            buf
+        } else {
+            fs::read(message).with_context(|| format!("reading {message}"))?
+        };
+        let key = decode_paste_key(source.key.as_deref().unwrap())?;
+        return Ok((bytes, key));
+    }
+
+    // Otherwise we fetch from the server; build a location and persist a backup.
+    let loc = if let Some(url) = &source.url {
+        PasteLocation::from_share_url(url)?
+    } else if let (Some(id), Some(server)) = (&source.id, &source.server) {
+        PasteLocation::from_parts(server, id, source.key.as_deref())?
+    } else {
+        bail!("provide --url, or --message + --key, or --id + --server + --key");
+    };
+    let key = loc
+        .key
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no paste key — pass it in the URL fragment or via --key"))?;
+
+    eprintln!(
+        "⚠️  Fetching paste {} — PrivateBin pastes may be burn-after-reading; this can DELETE it server-side.",
+        loc.id
+    );
+    let (json, burn) = fetch_paste(&loc)?;
+    let backup = format!("{}.json", sanitize_filename(&loc.id));
+    if let Err(e) = fs::write(&backup, &json) {
+        eprintln!("⚠️  could not save a backup of the fetched paste: {e}");
+    } else {
+        eprintln!("💾 Saved fetched paste to {backup} (re-crack with `--message {backup} --key <key>`).");
+    }
+    if burn {
+        eprintln!("⚠️  This paste was burn-after-reading: it is now consumed.");
+    }
+    Ok((json, key))
 }
 
 fn build_candidate_source(args: &CandidateArgs) -> Result<Box<dyn CandidateSource>> {

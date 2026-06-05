@@ -1,0 +1,27 @@
+{
+  "answer": {
+    "keyBase58": "Cvh7cQjy9y4bQFopRJ61BJVRSJLq92wLt85Kdt7eXAF",
+    "password": "hunter2",
+    "plaintext": "{\"paste\":\"the privatebin secret\"}"
+  },
+  "paste": {
+    "status": 0,
+    "v": 2,
+    "adata": [
+      [
+        "AQgPFh0kKzI5QEdOVVxjag==",
+        "BSRDYoGgv94=",
+        100000,
+        256,
+        128,
+        "aes",
+        "gcm",
+        "zlib"
+      ],
+      "plaintext",
+      0,
+      0
+    ],
+    "ct": "hYHBzFT11/UORM3+Vggjamrfo7lNvVykjBcgOuGd7A7e0YN7ExfgsfkTn+7s47KrC5Mw"
+  }
+}
