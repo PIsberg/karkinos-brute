@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep the load/throughput tests (tests/load.rs) fast in CI. Locally they
+  # default to a much larger keyspace for a real stress run; here we just
+  # smoke-test the dispatch path end to end.
+  LOADTEST_CANDIDATES: "20000"
 
 jobs:
   build-and-test:
@@ -27,3 +31,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      # The engine load tests are far more representative of real cracking in
+      # release mode (the dispatch hot path is heavily optimized), so run them
+      # once more optimized — still on the small CI keyspace via LOADTEST_CANDIDATES.
+      - name: Run load tests (release, small keyspace)
+        run: cargo test --release --test load -- --nocapture
