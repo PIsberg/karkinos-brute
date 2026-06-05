@@ -33,6 +33,12 @@ base64 = "0.22"
 bs58 = "0.5"
 flate2 = "1"
 
+# OneTimeSecret target: recover a weak *passphrase* offline from its stored hash.
+# OTS hashes the passphrase with Argon2id (current) or bcrypt (legacy) — both
+# standard, pure-Rust, reference-tested password-hash formats.
+argon2 = "0.5"
+bcrypt = "0.16"
+
 # GPU backend (opt-in): pure-Rust compute via wgpu/WGSL. Off by default.
 wgpu = { version = "0.20", optional = true }
 pollster = { version = "0.3", optional = true }

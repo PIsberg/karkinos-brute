@@ -22,6 +22,18 @@ The engine is target-agnostic; each attack is one `Target` impl. Most targets ar
   use. See `src/target/pwpush.rs` and `docs/pwpush.md`; end-to-end testing uses a
   self-hosted `pglombardo/pwpush` Docker instance (`scripts/pwpush_create.mjs`),
   never a public one, and is **not** part of `cargo test`.
+- `onetimesecret` — **offline** recovery of a weak *passphrase* from its stored
+  OneTimeSecret hash. OneTimeSecret is not zero-knowledge (the value is encrypted
+  server-side), but the passphrase is stored as a real password hash — **Argon2id**
+  (current, `$argon2id$…`, memory-hard 64 MiB/guess in prod) or **bcrypt** (legacy,
+  `$2a$…`) — which *is* a self-contained offline-crackable artifact (e.g. from a
+  Redis dump on an authorized engagement). The target (`src/target/onetimesecret.rs`)
+  detects the scheme by prefix and verifies each candidate; the recovered "secret"
+  IS the passphrase. Uses the pure-Rust `argon2` + `bcrypt` crates; verification
+  reads cost params from the hash, so it's parameter-agnostic. Fully `cargo
+  test`-able offline (incl. a published OpenBSD bcrypt vector as an independent
+  oracle) — no server. Recovering the secret *value* additionally needs the
+  instance global secret and is out of scope. See `docs/onetimesecret.md`.
 
 > The repo is `karkinos-brute` but the crate, binary, and library are still named
 > `bruteforcer` (see `Cargo.toml`). CLI invocations and `use bruteforcer::...`

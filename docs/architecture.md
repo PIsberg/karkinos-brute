@@ -5,9 +5,11 @@ The engine (candidate generation + parallel dispatch) is target-agnostic; each
 attack is a module that implements one trait. Bundled targets: `yopass`
 (offline recovery of a weak *custom password* on a yopass OpenPGP secret; see
 [`yopass.md`](yopass.md)), `privatebin` (a weak paste password on a
-PrivateBin v2 paste; see [`privatebin.md`](privatebin.md)), and `pwpush` (a weak
+PrivateBin v2 paste; see [`privatebin.md`](privatebin.md)), `pwpush` (a weak
 push *passphrase* on a PasswordPusher server — the one **online** target, since
-it isn't zero-knowledge; see [`pwpush.md`](pwpush.md)).
+it isn't zero-knowledge; see [`pwpush.md`](pwpush.md)), and `onetimesecret`
+(a weak *passphrase* recovered offline from its stored Argon2id/bcrypt hash; see
+[`onetimesecret.md`](onetimesecret.md)).
 
 > The crate, binary, and library are named `bruteforcer` even though the repo is
 > `karkinos-brute`. CLI examples and `use bruteforcer::...` paths use that name.
@@ -443,6 +445,7 @@ src/
     skesk_v6.rs    manual v6-SKESK parse + S2K + HKDF + AES-256-GCM verify
     privatebin.rs  paste/URL parsing, fetch, PBKDF2 + AES-256-GCM verify
     pwpush.rs      online passphrase oracle: paced/retried HTTP retrieval
+    onetimesecret.rs  offline passphrase recovery from an Argon2id/bcrypt hash
   gpu/             (feature = "gpu")
     mod.rs         wgpu host: batched S2K dispatch + CPU verify
     s2k.wgsl       SHA-256 S2K compute shader (chunked, watchdog-safe)

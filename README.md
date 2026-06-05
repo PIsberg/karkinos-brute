@@ -37,13 +37,15 @@ Each target is documented in its own file:
 | **yopass** | a weak custom password on a [yopass](https://github.com/jhaals/yopass) OpenPGP secret, with an optional GPU S2K backend | offline | [`docs/yopass.md`](docs/yopass.md) |
 | **PrivateBin** | a weak paste password on a [PrivateBin](https://github.com/PrivateBin/PrivateBin) v2 paste, given the URL key | offline | [`docs/privatebin.md`](docs/privatebin.md) |
 | **PasswordPusher** | a weak push *passphrase* on a [PasswordPusher](https://github.com/pglombardo/PasswordPusher) server | **online** | [`docs/pwpush.md`](docs/pwpush.md) |
+| **OneTimeSecret** | a weak *passphrase* from its stored [OneTimeSecret](https://github.com/onetimesecret/onetimesecret) hash (Argon2id/bcrypt) | offline | [`docs/onetimesecret.md`](docs/onetimesecret.md) |
 
 Quick taste:
 
 ```sh
-bruteforcer yopass     crack --message secret.asc --wordlist rockyou.txt
-bruteforcer privatebin crack --url "https://privatebin.net/?<id>#<key>" --charset digits --max 6
-bruteforcer pwpush     crack --url "http://localhost:5100/p/<token>" --charset digits --max 4
+bruteforcer yopass        crack --message secret.asc --wordlist rockyou.txt
+bruteforcer privatebin    crack --url "https://privatebin.net/?<id>#<key>" --charset digits --max 6
+bruteforcer pwpush        crack --url "http://localhost:5100/p/<token>" --charset digits --max 4
+bruteforcer onetimesecret crack --hash '$argon2id$v=19$m=65536,t=2,p=1$...' --wordlist rockyou.txt
 ```
 
 > **yopass and PrivateBin are offline** — you crack a downloaded blob locally,
@@ -53,12 +55,14 @@ bruteforcer pwpush     crack --url "http://localhost:5100/p/<token>" --charset d
 > authorized to test — e.g. your own self-hosted one. See [`docs/pwpush.md`](docs/pwpush.md).
 
 **Which is hardest to crack?** See [`docs/security-comparison.md`](docs/security-comparison.md)
-— short version: yopass and PrivateBin have comparable per-guess cost, but
-PrivateBin edges yopass because its high-entropy key never reaches the server (a
-leaked ciphertext is uncrackable regardless of password). PasswordPusher is a
-different category entirely — there's nothing to crack offline at all (server-side
-encryption, passphrase checked online), which is its own kind of strength and
-weakness.
+— short version: on per-guess cost, **OneTimeSecret wins by a mile** because its
+Argon2id passphrase hash is *memory-hard* (64 MiB/guess), defeating the GPU/ASIC
+acceleration that makes yopass's and PrivateBin's plain-SHA-256 KDFs cheap.
+PrivateBin edges yopass on threat model (its key never reaches the server).
+PasswordPusher is a category apart — nothing to crack offline at all (server-side
+encryption, passphrase checked online). There's no single winner — each is
+strongest on a different axis (per-guess cost, mountability, or keeping the
+operator out), which the full doc breaks down.
 
 ## Architecture
 
@@ -75,6 +79,7 @@ src/
     skesk_v6.rs    manual v6-SKESK parse + S2K + HKDF + AES-256-GCM verify
     privatebin.rs  paste/URL parsing, fetch, PBKDF2 + AES-256-GCM verify, inflate
     pwpush.rs      online passphrase guess: HTTP retrieval oracle, paced + retried
+    onetimesecret.rs  offline passphrase recovery from an Argon2id/bcrypt hash
   gpu/             (feature = "gpu")
     mod.rs         wgpu host: batched S2K dispatch + CPU verify
     s2k.wgsl       SHA-256 S2K compute shader (chunked, 16-word schedule)
