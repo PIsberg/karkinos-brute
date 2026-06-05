@@ -17,6 +17,7 @@ use bruteforcer::engine::runner::{run, Outcome, RunConfig};
 use bruteforcer::target::privatebin::{
     decode_paste_key, fetch_paste, PasteLocation, PrivatebinTarget,
 };
+use bruteforcer::target::onetimesecret::OnetimesecretTarget;
 use bruteforcer::target::pwpush::{PushLocation, PwpushTarget};
 use bruteforcer::target::yopass::{fetch_ciphertext, SecretLocation, YopassTarget};
 use bruteforcer::target::Target;
@@ -44,6 +45,11 @@ enum Command {
     Pwpush {
         #[command(subcommand)]
         action: PwpushAction,
+    },
+    /// OneTimeSecret (offline passphrase recovery from a stored hash).
+    Onetimesecret {
+        #[command(subcommand)]
+        action: OnetimesecretAction,
     },
 }
 
@@ -141,6 +147,42 @@ enum PwpushAction {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum OnetimesecretAction {
+    /// Recover a weak passphrase offline from its stored hash (Argon2id/bcrypt).
+    ///
+    /// OneTimeSecret stores the passphrase as an Argon2id (current) or bcrypt
+    /// (legacy) hash. Given that hash — e.g. dumped from an instance you are
+    /// authorized to test — this recovers the passphrase locally, no server.
+    Crack {
+        #[command(flatten)]
+        source: OtsCrackInput,
+        #[command(flatten)]
+        candidates: CandidateArgs,
+        /// Worker threads (default: number of CPUs).
+        #[arg(short, long)]
+        threads: Option<usize>,
+        /// Disable the progress display.
+        #[arg(long)]
+        no_progress: bool,
+        /// Write the recovered passphrase here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Input for cracking a OneTimeSecret passphrase: the stored hash, inline or from
+/// a file. There is no network path — the hash is the whole oracle.
+#[derive(Args)]
+struct OtsCrackInput {
+    /// The stored passphrase hash, e.g. '$argon2id$...' or '$2a$...'.
+    #[arg(long, group = "otssrc")]
+    hash: Option<String>,
+    /// Read the hash from this file ('-' for stdin).
+    #[arg(long, group = "otssrc")]
+    hash_file: Option<String>,
 }
 
 /// Input for cracking a PasswordPusher passphrase. There is no saved-blob mode:
@@ -270,6 +312,15 @@ fn main() -> Result<()> {
                 no_progress,
                 out,
             } => pwpush_crack(source, candidates, threads, delay_ms, no_progress, out),
+        },
+        Command::Onetimesecret { action } => match action {
+            OnetimesecretAction::Crack {
+                source,
+                candidates,
+                threads,
+                no_progress,
+                out,
+            } => onetimesecret_crack(source, candidates, threads, no_progress, out),
         },
     }
 }
@@ -639,6 +690,53 @@ fn pwpush_crack(
         Outcome::Found { candidate, secret } => {
             eprintln!("\n✅ Passphrase found: {}", String::from_utf8_lossy(&candidate));
             emit_secret(&secret, out)
+        }
+        Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
+    }
+}
+
+fn onetimesecret_crack(
+    source: OtsCrackInput,
+    candidates: CandidateArgs,
+    threads: Option<usize>,
+    no_progress: bool,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    // Obtain the stored passphrase hash (inline, file, or stdin).
+    let hash = if let Some(h) = &source.hash {
+        h.clone()
+    } else if let Some(path) = &source.hash_file {
+        let raw = if path == "-" {
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_to_string(&mut buf)
+                .context("reading hash from stdin")?;
+            buf
+        } else {
+            fs::read_to_string(path).with_context(|| format!("reading {path}"))?
+        };
+        raw.trim().to_string()
+    } else {
+        bail!("provide --hash, or --hash-file");
+    };
+
+    let target = Arc::new(OnetimesecretTarget::from_hash(&hash)?);
+    let source_box = build_candidate_source(&candidates)?;
+    let cfg = RunConfig {
+        threads: threads.unwrap_or_else(|| num_cpus::get().max(1)),
+        progress: !no_progress,
+    };
+    eprintln!(
+        "Cracking with {} threads against target '{}'...",
+        cfg.threads,
+        target.name()
+    );
+
+    match run(target, source_box, cfg)? {
+        Outcome::Found { candidate, .. } => {
+            eprintln!("\n✅ Passphrase found: {}", String::from_utf8_lossy(&candidate));
+            emit_secret(&candidate, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
     }

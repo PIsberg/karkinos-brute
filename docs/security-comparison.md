@@ -1,69 +1,85 @@
-# Which target is hardest to crack? (yopass vs PrivateBin vs PasswordPusher)
+# Which target is hardest to crack? (yopass vs PrivateBin vs PasswordPusher vs OneTimeSecret)
 
-A comparison of the three bundled targets *from a crackability standpoint* — how
+A comparison of the four bundled targets *from a crackability standpoint* — how
 well each service resists an attacker trying to recover a weak, human-chosen
 password/passphrase.
 
-The three split into **two architectures**, and that split matters more than any
-KDF detail:
+The cleanest way to organize them is **what an offline attacker can crack, and
+from what**:
 
 - **yopass and PrivateBin are zero-knowledge** (encrypt client-side; the password
-  feeds a KDF into the decryption key). They hide a strong random key somewhere
-  and *optionally* layer a human password on top. The attack is **offline**:
-  download the blob once, crack the password locally. Below they're compared on
-  two axes — cost per guess, and threat model.
-- **PasswordPusher is server-side-trust** (encrypts at rest under a server key;
-  the passphrase is a server-side string compare). There is **no offline
-  artifact** — the attack, if any, is **online**. It's analysed separately at the
-  end because the two axes below don't even apply to it.
+  feeds a KDF into the decryption key). The offline attack uses the **downloaded
+  ciphertext**: crack the password locally, no further server contact.
+- **OneTimeSecret is server-side-trust for the *value*, but stores the passphrase
+  as a real password hash.** The value can't be cracked offline (it's encrypted
+  under a server-held global secret), but the passphrase **hash** — Argon2id or
+  legacy bcrypt — *is* an offline-crackable artifact, obtained from a database/Redis
+  dump rather than the share URL.
+- **PasswordPusher is server-side-trust with no crackable hash at all** (encrypts
+  at rest under a server key; the passphrase is a plaintext server-side string
+  compare). There is **no offline artifact** — the only attack is **online**.
 
-For the two zero-knowledge targets the question splits into two independent axes:
+So three of the four expose something offline-crackable and are compared on two
+axes; PasswordPusher has neither and is analysed separately:
 
-1. **Cost per guess** — how expensive is one password attempt (the KDF work factor)?
-2. **Can the attack be mounted at all** — what does an attacker need to *have*
-   before per-guess cost even matters (the threat model / where the key lives)?
+1. **Cost per guess** — how expensive is one attempt (the KDF / hash work factor)?
+2. **Can the attack be mounted at all** — what must an attacker *have* before
+   per-guess cost even matters (the threat model / where the secret material lives)?
 
-**TL;DR.** Among the zero-knowledge pair, **PrivateBin beats yopass**: per-guess
-cost is roughly equal (yopass marginally higher), but PrivateBin's 256-bit key
-lives only in the URL fragment and never reaches the server, so a leaked
-ciphertext is uncrackable *regardless of password strength*, and its default
-paste has no crackable password at all. yopass's custom-password mode makes the
-password the **sole** secret, so the stored blob alone is offline-crackable
-whenever that password is weak. **PasswordPusher is in a different category** —
-nothing is offline-crackable at all, which is a real strength against a *thief who
-steals data*, but it's purchased by trusting the server (which can read every
-secret) and by reducing any passphrase attack to a noisy, logged, rate-limited
-*online* one.
+**TL;DR.**
+- **Per-guess cost (Axis 1): OneTimeSecret wins by orders of magnitude.** Its
+  Argon2id passphrase hash is **memory-hard** (~64 MiB/guess in production),
+  defeating the GPU/ASIC acceleration that makes yopass's and PrivateBin's plain
+  SHA-256 KDFs cheap. yopass and PrivateBin are a near-tie (yopass marginally
+  higher); legacy-bcrypt OneTimeSecret still beats both.
+- **Threat model (Axis 2): PrivateBin is strongest among the URL-shareable pair** —
+  its 256-bit key never reaches the server, so a leaked ciphertext is uncrackable
+  regardless of password, and the default paste has no crackable password at all.
+- **PasswordPusher is a category apart**: nothing is offline-crackable, a real
+  strength against a data thief, but bought by trusting the server (which can read
+  every secret) and reducing any passphrase attack to a noisy, logged,
+  rate-limited *online* one.
+- **OneTimeSecret's catch:** the thing you crack (the passphrase hash) is only
+  obtainable *after* compromising the store — so although it's the hardest per
+  guess, the attacker already needed deep access to get the hash in the first place.
 
-## Axis 1 — Cost per guess (KDF work factor)
+## Axis 1 — Cost per guess (KDF / hash work factor)
 
-Both KDFs are SHA-256-based and iterate to a similar total amount of work:
+yopass and PrivateBin use **SHA-256-based** KDFs of similar total work;
+OneTimeSecret uses a **memory-hard Argon2id** (or legacy bcrypt) and is in a
+different league:
 
-| | yopass (`/c/` custom password) | PrivateBin (password mode) |
-|---|---|---|
-| KDF | OpenPGP iterated+salted **S2K**, SHA-256 | **PBKDF2-HMAC-SHA256** |
-| Work factor (default) | 16,777,216 octets hashed ≈ **262k** SHA-256 blocks/guess | 100,000 iterations ≈ **200k** SHA-256 blocks/guess |
-| Measured rate¹ | **~1,140 guesses/sec** | **~1,000 guesses/sec** |
-| Memory-hard? | No | No |
-| GPU/ASIC-acceleratable? | Yes (a GPU S2K backend ships here) | Yes |
+| | yopass (`/c/`) | PrivateBin (pw mode) | OneTimeSecret (passphrase hash) |
+|---|---|---|---|
+| KDF / hash | OpenPGP **S2K**, SHA-256 | **PBKDF2-HMAC-SHA256** | **Argon2id** (current) / bcrypt (legacy) |
+| Work factor (default) | 16,777,216 octets ≈ **262k** SHA-256 blocks/guess | 100,000 iters ≈ **200k** SHA-256 blocks/guess | **64 MiB memory + t=2**/guess (Argon2id) |
+| Measured rate¹ | **~1,140 g/s** | **~1,000 g/s** | orders of magnitude slower (memory-bound) |
+| Memory-hard? | No | No | **Yes** (Argon2id) / No (bcrypt) |
+| GPU/ASIC-acceleratable? | Yes (a GPU S2K backend ships here) | Yes | **Largely no** (Argon2id is designed to resist it) |
 
 ¹ Reference machine, release build, 16 threads. yopass measured against a real
-v6 secret; PrivateBin measured by exhausting 100,000 candidates against the
-committed test fixture (`cargo`-independent, on the same box).
+v6 secret; PrivateBin by exhausting 100,000 candidates against the committed test
+fixture. OneTimeSecret isn't given a single rate because it's set by the hash's
+own cost parameters (production Argon2id at 64 MiB/guess is dramatically slower and,
+crucially, *can't* be sped up much with a GPU).
 
-**Verdict on Axis 1: a near-tie, slight edge to yopass.** Both sit in the same
-order of magnitude (~10⁵–10⁶ SHA-256 compressions per guess), so an attacker
-cracks them at within ~15 % of the same speed. yopass costs marginally more per
-guess. Crucially, **neither is memory-hard** (no Argon2/scrypt), so both are
-linearly accelerated by GPUs/ASICs and the per-guess cost is *not* a strong
-defense for either — only password entropy is. (If a yopass secret ever used an
-Argon2 S2K, that axis would flip hard in yopass's favor.)
+**Verdict on Axis 1: OneTimeSecret wins decisively; yopass and PrivateBin are a
+near-tie behind it.** yopass and PrivateBin sit in the same order of magnitude
+(~10⁵–10⁶ SHA-256 compressions/guess, within ~15 % of each other, slight edge to
+yopass) and — crucially — **neither is memory-hard**, so both are linearly
+accelerated by GPUs/ASICs; only password entropy really defends them. OneTimeSecret's
+Argon2id is **memory-hard by design**: the 64 MiB working set throttles parallel
+hardware, so per-guess cost is itself a meaningful defense, not just entropy. Even
+legacy bcrypt OneTimeSecret (adaptive, though not memory-hard) is slower per guess
+than either SHA-256 KDF.
 
 Concretely, at ~1,000–1,140 guesses/sec a 6-character lowercase password
-(26⁶ ≈ 3.1×10⁸) takes ~3 days to exhaust on this one machine, on *either* service
-— and far less in expectation or on better hardware. See the
-[yopass timing table](yopass.md#how-long-does-it-take) for the full keyspace grid;
-PrivateBin's numbers are within ~15 % of it.
+(26⁶ ≈ 3.1×10⁸) takes ~3 days to exhaust on this one machine against *yopass or
+PrivateBin* — and far less in expectation or on a GPU. Against production-cost
+OneTimeSecret Argon2id the same keyspace is effectively out of reach on one
+machine, and a GPU barely helps. See the
+[yopass timing table](yopass.md#how-long-does-it-take) for the SHA-256 grid;
+PrivateBin is within ~15 % of it, OneTimeSecret far above it.
 
 ## Axis 2 — Can the attack be mounted at all (threat model)
 
@@ -87,6 +103,35 @@ can offline-crack it directly from the stored ciphertext.
 > ~130-bit key in the fragment, withheld from the server. But that mode has **no
 > password to crack** — so it isn't a target here. The crackable yopass mode is
 > specifically `/c/`, which trades the URL key away for a human password.
+
+## OneTimeSecret — hardest per guess, but the hash is the catch
+
+OneTimeSecret is a **hybrid**: server-side-trust for the secret value, but the
+passphrase is a real, offline-crackable password hash.
+
+- **Value:** encrypted **server-side** under the instance global secret (with the
+  passphrase mixed in). Like PasswordPusher, a stolen ciphertext row is not
+  decryptable without the server's key — and the server *can* read secrets, so you
+  trust the operator.
+- **Passphrase:** stored as **Argon2id** (current) or **bcrypt** (legacy) and
+  verified on retrieval. That hash *is* offline-crackable — but you only get it by
+  **dumping the store** (Redis/DB), not from the share URL.
+
+| | OneTimeSecret (passphrase) |
+|---|---|
+| Per-guess cost (Axis 1) | **Highest of all targets** — Argon2id is memory-hard (~64 MiB/guess), GPU-resistant |
+| What the attacker must already have (Axis 2) | the **passphrase hash** — i.e. prior **store compromise** (not just the link) |
+| Stolen ciphertext alone crackable? | **No** — value is under the server's global secret |
+| Stolen hash crackable (weak passphrase)? | **Yes, but slowly** — memory-hard cost buys real time |
+
+So OneTimeSecret inverts the usual trade-off. On **Axis 1** it's the strongest by a
+wide margin: even with the hash in hand, a memory-hard Argon2id makes brute force
+genuinely expensive, so per-guess cost — not just entropy — defends a weak
+passphrase (within reason). But on **Axis 2** the bar to *start* is high: the hash
+only exists server-side, so an attacker needs to have already breached the store.
+An attacker who only has the share link has nothing to crack offline at all; one
+who has dumped the database faces the hardest hash here. Our
+[`onetimesecret`](onetimesecret.md) target operates on that dumped hash.
 
 ## PasswordPusher — a different architecture (server-side trust)
 
@@ -127,20 +172,33 @@ attack, against a server you are authorized to test.
 
 ## Overall verdict
 
-**Among the two zero-knowledge targets, PrivateBin has the best security from a
-crackable perspective; PasswordPusher sits in a separate category.**
+**There's no single winner — it depends which question you ask.** Each target is
+"strongest" on a different axis:
 
-- **Zero-knowledge pair — Axis 1 (per-guess cost): ~tie**, marginal edge to
-  yopass (~1,140 vs ~1,000 guesses/sec; neither memory-hard).
-- **Zero-knowledge pair — Axis 2 (threat model): PrivateBin wins clearly** — the
-  high-entropy key never reaches the server, so a leaked ciphertext is uncrackable
-  regardless of password strength, and the default paste exposes no password at
-  all. yopass `/c/` makes a weak password the single point of failure against
-  anyone holding the blob.
-- **PasswordPusher: no offline crack exists**, which is the strongest possible
-  answer to "can a leaked blob be cracked?" (no) — but it's bought by trusting the
-  server with the plaintext and by reducing any passphrase attack to a noisy,
-  rate-limited online one. Strong against thieves, weak against the operator.
+- **Hardest per guess → OneTimeSecret.** Memory-hard Argon2id (~64 MiB/guess)
+  makes even a recovered hash expensive to attack and GPU-resistant — the only
+  target where per-guess cost, not just entropy, is a real defense. Caveat: you
+  only get that hash by compromising the store first.
+- **Hardest to even start an offline attack → PasswordPusher**, then **PrivateBin**.
+  PasswordPusher exposes *no* offline-crackable artifact at all (server-side
+  encryption, passphrase compared online); PrivateBin exposes a blob but withholds
+  the 256-bit key, so a leaked ciphertext is uncrackable regardless of password.
+- **Weakest → yopass `/c/`.** A weak custom password is the **sole** secret on the
+  downloaded blob, with a non-memory-hard KDF — offline-crackable by anyone who
+  holds the ciphertext.
+
+Per axis:
+
+- **Axis 1 (per-guess cost): OneTimeSecret ≫ bcrypt-OneTimeSecret > yopass ≳
+  PrivateBin.** The two SHA-256 KDFs are a near-tie (marginal edge to yopass,
+  ~1,140 vs ~1,000 g/s, neither memory-hard); Argon2id is in a different league.
+- **Axis 2 (can the attack be mounted): PasswordPusher (nothing offline) >
+  PrivateBin (key withheld) > OneTimeSecret (needs a store dump) > yopass `/c/`
+  (the blob is enough).**
+- **The trust trade-off:** OneTimeSecret and PasswordPusher buy their strength by
+  letting the **server read your secret**; yopass and PrivateBin don't. "Hardest to
+  crack" is not the same as "best" — a zero-knowledge design with a strong key
+  (PrivateBin default / yopass `/s/`) keeps the operator out entirely.
 
 ### Practical guidance
 
@@ -160,3 +218,10 @@ crackable perspective; PasswordPusher sits in a separate category.**
   it," choose a zero-knowledge tool. If you use a PasswordPusher passphrase, it
   defends only against *online* guessing, so rely on the unguessable URL token and
   the server's rate-limiting rather than a short passphrase.
+- **OneTimeSecret** gives the best per-guess protection *if* a passphrase hash
+  leaks (memory-hard Argon2id), so a passphrase here survives much more than a
+  yopass/PrivateBin password would against the same hardware — but it's still only
+  as strong as the passphrase, and the operator can read the value regardless.
+  Operators should ensure current Argon2id (not legacy bcrypt) is in use and that
+  the global secret and Redis store are well protected, since the passphrase hash
+  becomes crackable the moment the store is dumped.
