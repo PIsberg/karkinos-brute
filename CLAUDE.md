@@ -34,6 +34,29 @@ The engine is target-agnostic; each attack is one `Target` impl. Most targets ar
   test`-able offline (incl. a published OpenBSD bcrypt vector as an independent
   oracle) — no server. Recovering the secret *value* additionally needs the
   instance global secret and is out of scope. See `docs/onetimesecret.md`.
+- `deleto` — **offline** recovery of a weak *password* from a dele.to share's
+  stored `passwordHash`. dele.to is zero-knowledge for the secret *value*
+  (AES-256-GCM under a random 256-bit key carried in the URL `#fragment`, withheld
+  from the server — like PrivateBin), so the value isn't offline-recoverable. But
+  the optional password is verified **server-side** against `passwordHash =
+  base64(password + salt)` (`salt` defaults to the literal
+  `"default-salt-change-in-production"`). That stored hash — e.g. from a Redis/file
+  store dump on an authorized engagement — IS an offline-crackable artifact, and
+  the **weakest** scheme in the repo: a non-KDF base64 concat, so it's directly
+  *reversible* if you know the salt (`deleto::recover_directly`), the opposite
+  extreme from OneTimeSecret's memory-hard Argon2id. The target
+  (`src/target/deleto.rs`) verifies each candidate by recomputing the hash, takes
+  the salt via `--salt` (default applied), and the recovered "secret" IS the
+  password. Fully `cargo test`-able offline — no server. The module also provides
+  an **online** mode (`deleto online`, `DeletoOnlineTarget`) for a *live* share:
+  dele.to gates the ciphertext behind the password server-side via the
+  `getSecureShare` Next.js server action (no REST API), so each candidate is one
+  HTTP POST (wrong password = clean miss, burns no view, unthrottled — like
+  `pwpush`); the build-specific action id is auto-discovered from the client bundle
+  (override with `--action-id`), and given the URL `#fragment` key a hit is also
+  AES-256-GCM-decrypted. Online e2e is manual against a local Docker instance
+  (`scripts/deleto_create.mjs`), never the public host, and not in `cargo test`.
+  See `docs/deleto.md`.
 
 > The repo is `karkinos-brute` but the crate, binary, and library are still named
 > `bruteforcer` (see `Cargo.toml`). CLI invocations and `use bruteforcer::...`
