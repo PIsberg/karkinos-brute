@@ -17,6 +17,9 @@ use bruteforcer::engine::runner::{run, Outcome, RunConfig};
 use bruteforcer::target::privatebin::{
     decode_paste_key, fetch_paste, PasteLocation, PrivatebinTarget,
 };
+use bruteforcer::target::deleto::{
+    discover_get_secure_share_action, DeletoLocation, DeletoOnlineTarget, DeletoTarget, DEFAULT_SALT,
+};
 use bruteforcer::target::onetimesecret::OnetimesecretTarget;
 use bruteforcer::target::pwpush::{PushLocation, PwpushTarget};
 use bruteforcer::target::yopass::{fetch_ciphertext, SecretLocation, YopassTarget};
@@ -50,6 +53,11 @@ enum Command {
     Onetimesecret {
         #[command(subcommand)]
         action: OnetimesecretAction,
+    },
+    /// dele.to (offline password recovery from a stored passwordHash).
+    Deleto {
+        #[command(subcommand)]
+        action: DeletoAction,
     },
 }
 
@@ -171,6 +179,99 @@ enum OnetimesecretAction {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum DeletoAction {
+    /// Recover a weak password offline from its stored `passwordHash`.
+    ///
+    /// dele.to is zero-knowledge for the secret value (AES-256-GCM under a URL
+    /// fragment key), so the value isn't offline-recoverable. But the optional
+    /// password is checked server-side against `passwordHash = base64(password +
+    /// salt)`. Given that hash — e.g. dumped from an instance you are authorized
+    /// to test — this recovers the password locally, no server. (The scheme is
+    /// directly reversible if you know the salt; this still drives the engine.)
+    Crack {
+        #[command(flatten)]
+        source: DeletoCrackInput,
+        #[command(flatten)]
+        candidates: CandidateArgs,
+        /// Instance salt (dele.to's `process.env.SALT`). Defaults to dele.to's
+        /// documented fallback, which most self-hosted instances never change.
+        #[arg(long, default_value = DEFAULT_SALT)]
+        salt: String,
+        /// Worker threads (default: number of CPUs).
+        #[arg(short, long)]
+        threads: Option<usize>,
+        /// Disable the progress display.
+        #[arg(long)]
+        no_progress: bool,
+        /// Write the recovered password here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Recover a weak password ONLINE against a live dele.to share, then decrypt.
+    ///
+    /// There is no offline artifact in a share link: the ciphertext is gated
+    /// behind the password server-side, so every candidate is one HTTP request to
+    /// the `getSecureShare` server action (a wrong password is a clean miss). If
+    /// the URL fragment key is present, the recovered value is also decrypted.
+    /// ⚠️ Active online attack — authorized / self-hosted instances only.
+    Online {
+        #[command(flatten)]
+        source: DeletoOnlineInput,
+        #[command(flatten)]
+        candidates: CandidateArgs,
+        /// `getSecureShare` server-action id. Auto-discovered from the client
+        /// bundle if omitted (pass it to skip discovery or if discovery fails).
+        #[arg(long)]
+        action_id: Option<String>,
+        /// Worker threads. This is an online attack — keep it low.
+        #[arg(short, long, default_value_t = 1)]
+        threads: usize,
+        /// Minimum delay between requests, in ms. Use 0 for a localhost instance
+        /// you own; raise it to be polite to a shared server.
+        #[arg(long, default_value_t = 100)]
+        delay_ms: u64,
+        /// Disable the progress display.
+        #[arg(long)]
+        no_progress: bool,
+        /// Write the recovered secret here (default: stdout).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Input locating a live dele.to share for the online attack. The URL form
+/// carries the AES key in its `#fragment`; without a key the password is still
+/// recovered but the value can't be decrypted.
+#[derive(Args)]
+struct DeletoOnlineInput {
+    /// Full share URL incl. the `#<key>` fragment, e.g.
+    /// http://localhost:3000/view/<id>#<base64key>
+    #[arg(long, group = "donlinesrc")]
+    url: Option<String>,
+    /// Share id (use with --server). Pass --key to also decrypt the value.
+    #[arg(long, group = "donlinesrc", requires = "server")]
+    id: Option<String>,
+    /// Server base URL (use with --id), e.g. http://localhost:3000
+    #[arg(long)]
+    server: Option<String>,
+    /// Base64 AES key from the URL fragment (use with --id/--server to decrypt).
+    #[arg(long)]
+    key: Option<String>,
+}
+
+/// Input for cracking a dele.to password: the stored `passwordHash`, inline or
+/// from a file. There is no network path — the hash + salt are the whole oracle.
+#[derive(Args)]
+struct DeletoCrackInput {
+    /// The stored `passwordHash` (base64), from a store dump.
+    #[arg(long, group = "deletosrc")]
+    hash: Option<String>,
+    /// Read the `passwordHash` from this file ('-' for stdin).
+    #[arg(long, group = "deletosrc")]
+    hash_file: Option<String>,
 }
 
 /// Input for cracking a OneTimeSecret passphrase: the stored hash, inline or from
@@ -321,6 +422,25 @@ fn main() -> Result<()> {
                 no_progress,
                 out,
             } => onetimesecret_crack(source, candidates, threads, no_progress, out),
+        },
+        Command::Deleto { action } => match action {
+            DeletoAction::Crack {
+                source,
+                candidates,
+                salt,
+                threads,
+                no_progress,
+                out,
+            } => deleto_crack(source, candidates, salt, threads, no_progress, out),
+            DeletoAction::Online {
+                source,
+                candidates,
+                action_id,
+                threads,
+                delay_ms,
+                no_progress,
+                out,
+            } => deleto_online(source, candidates, action_id, threads, delay_ms, no_progress, out),
         },
     }
 }
@@ -739,6 +859,115 @@ fn onetimesecret_crack(
             emit_secret(&candidate, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
+    }
+}
+
+fn deleto_crack(
+    source: DeletoCrackInput,
+    candidates: CandidateArgs,
+    salt: String,
+    threads: Option<usize>,
+    no_progress: bool,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    // Obtain the stored passwordHash (inline, file, or stdin).
+    let hash = if let Some(h) = &source.hash {
+        h.clone()
+    } else if let Some(path) = &source.hash_file {
+        let raw = if path == "-" {
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_to_string(&mut buf)
+                .context("reading passwordHash from stdin")?;
+            buf
+        } else {
+            fs::read_to_string(path).with_context(|| format!("reading {path}"))?
+        };
+        raw.trim().to_string()
+    } else {
+        bail!("provide --hash, or --hash-file");
+    };
+
+    let target = Arc::new(DeletoTarget::new(&hash, salt.as_bytes())?);
+    let source_box = build_candidate_source(&candidates)?;
+    let cfg = RunConfig {
+        threads: threads.unwrap_or_else(|| num_cpus::get().max(1)),
+        progress: !no_progress,
+    };
+    eprintln!(
+        "Cracking with {} threads against target '{}'...",
+        cfg.threads,
+        target.name()
+    );
+
+    match run(target, source_box, cfg)? {
+        Outcome::Found { candidate, .. } => {
+            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            emit_secret(&candidate, out)
+        }
+        Outcome::Exhausted => bail!("keyspace exhausted; no password matched"),
+    }
+}
+
+fn deleto_online(
+    source: DeletoOnlineInput,
+    candidates: CandidateArgs,
+    action_id: Option<String>,
+    threads: usize,
+    delay_ms: u64,
+    no_progress: bool,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    // Locate the share (full URL with #key, or server + id [+ key]).
+    let loc = if let Some(url) = &source.url {
+        DeletoLocation::from_share_url(url)?
+    } else if let (Some(id), Some(server)) = (&source.id, &source.server) {
+        DeletoLocation::from_parts(server, id, source.key.as_deref())?
+    } else {
+        bail!("provide --url, or both --id and --server");
+    };
+
+    eprintln!("⚠️  ONLINE ATTACK against a live dele.to share. dele.to gates the ciphertext");
+    eprintln!("    behind a server-side password check, so every candidate is one HTTP request");
+    eprintln!("    to {}. Run this ONLY against an instance you", loc.view_endpoint());
+    eprintln!("    are authorized to test (e.g. your own self-hosted Docker instance).");
+    if loc.key.is_none() {
+        eprintln!("ℹ️  No URL key provided: the password will be recovered, but the value cannot");
+        eprintln!("    be decrypted. Pass the #fragment key (in --url) or --key to also decrypt.");
+    }
+
+    // Resolve the getSecureShare server-action id (explicit, or auto-discover).
+    let action_id = match action_id {
+        Some(a) => a,
+        None => {
+            eprintln!("🔎 Discovering the getSecureShare server-action id from the client bundle...");
+            let a = discover_get_secure_share_action(&loc.base_url, &loc.id)?;
+            eprintln!("   using action id {a}");
+            a
+        }
+    };
+
+    let target = Arc::new(DeletoOnlineTarget::new(&loc, action_id, Duration::from_millis(delay_ms)));
+    let source_box = build_candidate_source(&candidates)?;
+    let cfg = RunConfig {
+        threads: threads.max(1),
+        progress: !no_progress,
+    };
+    eprintln!(
+        "Guessing password with {} thread(s), {} ms min delay between requests...",
+        cfg.threads, delay_ms
+    );
+
+    match run(target, source_box, cfg)? {
+        Outcome::Found { candidate, secret } => {
+            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            if loc.key.is_some() {
+                eprintln!("🔓 Decrypted the value with the URL key.");
+            }
+            emit_secret(&secret, out)
+        }
+        Outcome::Exhausted => bail!("keyspace exhausted; no password matched"),
     }
 }
 

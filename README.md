@@ -38,6 +38,7 @@ Each target is documented in its own file:
 | **PrivateBin** | a weak paste password on a [PrivateBin](https://github.com/PrivateBin/PrivateBin) v2 paste, given the URL key | offline | [`docs/privatebin.md`](docs/privatebin.md) |
 | **PasswordPusher** | a weak push *passphrase* on a [PasswordPusher](https://github.com/pglombardo/PasswordPusher) server | **online** | [`docs/pwpush.md`](docs/pwpush.md) |
 | **OneTimeSecret** | a weak *passphrase* from its stored [OneTimeSecret](https://github.com/onetimesecret/onetimesecret) hash (Argon2id/bcrypt) | offline | [`docs/onetimesecret.md`](docs/onetimesecret.md) |
+| **dele.to** | a weak *password* on a [dele.to](https://github.com/dele-to/dele-to) share — offline from a dumped `passwordHash` (`base64(password+salt)`), or online against a live share (then decrypt) | offline + **online** | [`docs/deleto.md`](docs/deleto.md) |
 
 Quick taste:
 
@@ -46,6 +47,8 @@ bruteforcer yopass        crack --message secret.asc --wordlist rockyou.txt
 bruteforcer privatebin    crack --url "https://privatebin.net/?<id>#<key>" --charset digits --max 6
 bruteforcer pwpush        crack --url "http://localhost:5100/p/<token>" --charset digits --max 4
 bruteforcer onetimesecret crack --hash '$argon2id$v=19$m=65536,t=2,p=1$...' --wordlist rockyou.txt
+bruteforcer deleto        crack --hash '<base64 passwordHash>' --charset digits --max 6
+bruteforcer deleto        online --url "http://localhost:3000/view/<id>#<key>" --charset digits --max 4 --delay-ms 0
 ```
 
 > **yopass and PrivateBin are offline** — you crack a downloaded blob locally,
@@ -60,9 +63,11 @@ Argon2id passphrase hash is *memory-hard* (64 MiB/guess), defeating the GPU/ASIC
 acceleration that makes yopass's and PrivateBin's plain-SHA-256 KDFs cheap.
 PrivateBin edges yopass on threat model (its key never reaches the server).
 PasswordPusher is a category apart — nothing to crack offline at all (server-side
-encryption, passphrase checked online). There's no single winner — each is
-strongest on a different axis (per-guess cost, mountability, or keeping the
-operator out), which the full doc breaks down.
+encryption, passphrase checked online). At the other end, **dele.to is the
+weakest** — its password hash is a non-KDF `base64(password+salt)` with a public
+default salt, so a recovered hash is essentially reversible. There's no single
+winner — each is strongest on a different axis (per-guess cost, mountability, or
+keeping the operator out), which the full doc breaks down.
 
 ## Architecture
 
@@ -80,6 +85,7 @@ src/
     privatebin.rs  paste/URL parsing, fetch, PBKDF2 + AES-256-GCM verify, inflate
     pwpush.rs      online passphrase guess: HTTP retrieval oracle, paced + retried
     onetimesecret.rs  offline passphrase recovery from an Argon2id/bcrypt hash
+    deleto.rs      offline base64(password+salt) crack + online live-share attack
   gpu/             (feature = "gpu")
     mod.rs         wgpu host: batched S2K dispatch + CPU verify
     s2k.wgsl       SHA-256 S2K compute shader (chunked, 16-word schedule)
