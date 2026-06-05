@@ -55,12 +55,14 @@ bruteforcer onetimesecret crack --hash '$argon2id$v=19$m=65536,t=2,p=1$...' --wo
 > authorized to test — e.g. your own self-hosted one. See [`docs/pwpush.md`](docs/pwpush.md).
 
 **Which is hardest to crack?** See [`docs/security-comparison.md`](docs/security-comparison.md)
-— short version: among per-guess cost, **OneTimeSecret wins by a mile** because its
+— short version: on per-guess cost, **OneTimeSecret wins by a mile** because its
 Argon2id passphrase hash is *memory-hard* (64 MiB/guess), defeating the GPU/ASIC
 acceleration that makes yopass's and PrivateBin's plain-SHA-256 KDFs cheap.
 PrivateBin edges yopass on threat model (its key never reaches the server).
 PasswordPusher is a category apart — nothing to crack offline at all (server-side
-encryption, passphrase checked online).
+encryption, passphrase checked online). There's no single winner — each is
+strongest on a different axis (per-guess cost, mountability, or keeping the
+operator out), which the full doc breaks down.
 
 ## Architecture
 
