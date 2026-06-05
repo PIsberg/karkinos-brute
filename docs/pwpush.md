@@ -98,10 +98,26 @@ The unit tests in [`src/target/pwpush.rs`](../src/target/pwpush.rs) are fully
 classification, and `payload` extraction. They touch no network.
 
 End-to-end verification needs a running server, so it is **manual** and uses your
-own instance — never a public one:
+own instance — never a public one.
+
+**First, make sure the Docker daemon is running** (`docker run` fails with
+"cannot connect to the Docker daemon" / "the system cannot find the file
+specified" otherwise):
 
 ```sh
-# 1. Run a throwaway PasswordPusher (ephemeral SQLite; gone when the container is removed):
+# Windows / macOS — start Docker Desktop, then wait until it reports ready:
+#   Windows:  Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+#   macOS:    open -a Docker
+# Linux — start the service:
+#   sudo systemctl start docker
+docker info >/dev/null 2>&1 && echo "Docker is up" || echo "Docker is NOT running"
+```
+
+Then run the throwaway instance and crack against it:
+
+```sh
+# 1. Run a throwaway PasswordPusher (ephemeral SQLite; gone when the container is removed).
+#    First run pulls the image; give it a few seconds to boot before step 2.
 docker run -d --rm -p 5100:5100 --name pwpush pglombardo/pwpush:latest
 
 # 2. Create a passphrase-protected push and print the ready-to-run crack command:
