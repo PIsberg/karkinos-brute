@@ -18,7 +18,7 @@ num_cpus = "1"
 ureq = { version = "2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-indicatif = "0.17"
+indicatif = "0.18"
 
 # Manual v6-SKESK verification path (also the foundation for the GPU backend):
 # S2K (SHA-256) -> HKDF-SHA256 -> AES-256-GCM unwrap of the session key.
