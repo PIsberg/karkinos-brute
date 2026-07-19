@@ -37,7 +37,7 @@ flate2 = "1"
 # OTS hashes the passphrase with Argon2id (current) or bcrypt (legacy) — both
 # standard, pure-Rust, reference-tested password-hash formats.
 argon2 = "0.5"
-bcrypt = "0.16"
+bcrypt = "0.19"
 
 # GPU backend (opt-in): pure-Rust compute via wgpu/WGSL. Off by default.
 wgpu = { version = "0.20", optional = true }
