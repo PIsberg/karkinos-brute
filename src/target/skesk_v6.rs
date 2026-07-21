@@ -9,6 +9,7 @@
 //!      the cipher key length.
 //!   3. AEAD-open the packet's encrypted session key with `kek`, nonce = IV,
 //!      additional data = `aad = [0xC3, version, cipher_algo, aead_algo]`.
+//!
 //!   A correct passphrase makes the AEAD tag verify; a wrong one fails it.
 //!
 //! Only the combination current yopass uses is handled here: **AES-256 + GCM**.

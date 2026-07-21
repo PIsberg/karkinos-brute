@@ -227,9 +227,9 @@ impl GpuS2k {
             let len = c.len().min(MAX_PW_LEN);
             lens[ci] = len as u32;
             let base = ci * MAX_WORDS;
-            for j in 0..len {
+            for (j, &byte) in c.iter().enumerate().take(len) {
                 let wi = base + (j >> 2);
-                pw[wi] |= (c[j] as u32) << ((3 - (j & 3)) * 8);
+                pw[wi] |= (byte as u32) << ((3 - (j & 3)) * 8);
             }
         }
 

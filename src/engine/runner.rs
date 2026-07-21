@@ -66,8 +66,10 @@ pub fn run(
 
     let stop = Arc::new(AtomicBool::new(false));
     let tried = Arc::new(AtomicU64::new(0));
-    // Holds the first hit found. Mutex is contended only once (on success).
-    let hit: Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>> = Arc::new(Mutex::new(None));
+    // Holds the first hit found: (candidate, recovered plaintext). Mutex is
+    // contended only once (on success).
+    type Hit = (Vec<u8>, Vec<u8>);
+    let hit: Arc<Mutex<Option<Hit>>> = Arc::new(Mutex::new(None));
     // The first fatal worker error, if any.
     let worker_err: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
 
