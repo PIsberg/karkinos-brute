@@ -290,14 +290,17 @@ fn post_action(
 ) -> std::result::Result<(u16, String), ()> {
     let req = agent
         .post(endpoint)
-        .set("Next-Action", action_id)
-        .set("Content-Type", "text/plain;charset=UTF-8")
-        .set("Origin", origin)
-        .set("Accept", "text/x-component");
-    match req.send_string(body) {
-        Ok(resp) => Ok((resp.status(), resp.into_string().unwrap_or_default())),
-        Err(ureq::Error::Status(s, resp)) => Ok((s, resp.into_string().unwrap_or_default())),
-        Err(ureq::Error::Transport(_)) => Err(()),
+        .header("Next-Action", action_id)
+        .header("Content-Type", "text/plain;charset=UTF-8")
+        .header("Origin", origin)
+        .header("Accept", "text/x-component");
+    match req.send(body) {
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            let text = resp.into_body().read_to_string().unwrap_or_default();
+            Ok((code, text))
+        }
+        Err(_) => Err(()),
     }
 }
 
@@ -360,13 +363,14 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
         .get(&view)
         .call()
         .map_err(|e| anyhow!("fetching {view}: {e}"))?
-        .into_string()
+        .into_body()
+        .read_to_string()
         .map_err(|e| anyhow!("reading {view}: {e}"))?;
 
     let mut ids = BTreeSet::new();
     for chunk in extract_chunk_urls(&html, base_url.trim_end_matches('/')) {
         if let Ok(resp) = agent.get(&chunk).call() {
-            if let Ok(text) = resp.into_string() {
+            if let Ok(text) = resp.into_body().read_to_string() {
                 collect_hex40(&text, &mut ids);
             }
         }
@@ -396,10 +400,14 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
 }
 
 fn build_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        // Surface 4xx/5xx as Ok(response): post_action reads the body of error
+        // responses (a wrong password is a normal, body-carrying result here).
+        .http_status_as_error(false)
         .build()
+        .into()
 }
 
 /// A shared minimum-interval pacer (throttles the *total* request rate across all

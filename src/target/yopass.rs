@@ -115,7 +115,7 @@ pub fn fetch_ciphertext(loc: &SecretLocation) -> Result<(String, bool)> {
         Ok(resp) => resp,
         // yopass returns 404 when a secret doesn't exist — almost always because
         // it was a one-time secret that's already been viewed, or it expired.
-        Err(ureq::Error::Status(404, _)) => {
+        Err(ureq::Error::StatusCode(404)) => {
             bail!(
                 "secret not found at {endpoint} — for a one-time link this means it \
                  was already viewed once or its TTL expired (the ciphertext is gone)"
@@ -123,9 +123,12 @@ pub fn fetch_ciphertext(loc: &SecretLocation) -> Result<(String, bool)> {
         }
         Err(e) => return Err(anyhow::Error::new(e).context(format!("GET {endpoint}"))),
     };
-    let secret: SecretResponse = resp
-        .into_json()
-        .context("decoding yopass /secret response as JSON")?;
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .context("reading yopass /secret response")?;
+    let secret: SecretResponse =
+        serde_json::from_str(&body).context("decoding yopass /secret response as JSON")?;
     let _ = secret.expiration;
     Ok((secret.message, secret.one_time))
 }

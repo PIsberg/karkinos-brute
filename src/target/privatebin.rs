@@ -148,11 +148,14 @@ pub fn fetch_paste(loc: &PasteLocation) -> Result<(Vec<u8>, bool)> {
     let endpoint = loc.endpoint();
     let resp = ureq::get(&endpoint)
         // Without this header PrivateBin serves the HTML app, not the JSON paste.
-        .set("X-Requested-With", "JSONHttpRequest")
+        .header("X-Requested-With", "JSONHttpRequest")
         .call()
         .map_err(|e| anyhow::Error::new(e).context(format!("GET {endpoint}")))?;
 
-    let body = resp.into_string().context("reading PrivateBin response body")?;
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .context("reading PrivateBin response body")?;
     let parsed: PasteResponse =
         serde_json::from_str(&body).context("decoding PrivateBin paste JSON")?;
     if parsed.status != 0 || parsed.ct.is_empty() {
