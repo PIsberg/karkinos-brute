@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey.svg)](#)
+[![Static analysis](https://img.shields.io/badge/clippy%20%2B%20rustfmt-passing-brightgreen.svg?logo=rust)](.github/workflows/ci.yml)
+[![Dependencies](https://img.shields.io/badge/dependencies-up%20to%20date-brightgreen.svg)](Cargo.toml)
 
 A small, pluggable bruteforce **framework** in Rust. The engine (candidate
 generation + parallel dispatch) is target-agnostic; each attack is a module that

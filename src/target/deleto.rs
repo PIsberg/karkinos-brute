@@ -136,9 +136,7 @@ pub fn recover_directly(hash: &str, salt: &[u8]) -> Result<Option<Vec<u8>>> {
     let decoded = B64
         .decode(hash.trim().as_bytes())
         .map_err(|e| anyhow!("passwordHash is not valid base64: {e}"))?;
-    Ok(decoded
-        .strip_suffix(salt)
-        .map(|password| password.to_vec()))
+    Ok(decoded.strip_suffix(salt).map(|password| password.to_vec()))
 }
 
 // ----------------------------------------------------------------------------
@@ -248,9 +246,10 @@ pub fn decrypt_value(key: &[u8], iv_b64: &str, content_b64: &str) -> Result<Vec<
         .try_into()
         .map_err(|_| anyhow!("key must be 32 bytes, got {}", key.len()))?;
     let cipher = Aes256Gcm::new((&karr).into());
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = Nonce::try_from(iv.as_slice())
+        .map_err(|_| anyhow!("iv must be 12 bytes, got {}", iv.len()))?;
     cipher
-        .decrypt(nonce, ct.as_slice())
+        .decrypt(&nonce, ct.as_slice())
         .map_err(|_| anyhow!("AES-256-GCM decryption failed (wrong key or corrupt ciphertext)"))
 }
 
@@ -289,14 +288,17 @@ fn post_action(
 ) -> std::result::Result<(u16, String), ()> {
     let req = agent
         .post(endpoint)
-        .set("Next-Action", action_id)
-        .set("Content-Type", "text/plain;charset=UTF-8")
-        .set("Origin", origin)
-        .set("Accept", "text/x-component");
-    match req.send_string(body) {
-        Ok(resp) => Ok((resp.status(), resp.into_string().unwrap_or_default())),
-        Err(ureq::Error::Status(s, resp)) => Ok((s, resp.into_string().unwrap_or_default())),
-        Err(ureq::Error::Transport(_)) => Err(()),
+        .header("Next-Action", action_id)
+        .header("Content-Type", "text/plain;charset=UTF-8")
+        .header("Origin", origin)
+        .header("Accept", "text/x-component");
+    match req.send(body) {
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            let text = resp.into_body().read_to_string().unwrap_or_default();
+            Ok((code, text))
+        }
+        Err(_) => Err(()),
     }
 }
 
@@ -359,13 +361,14 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
         .get(&view)
         .call()
         .map_err(|e| anyhow!("fetching {view}: {e}"))?
-        .into_string()
+        .into_body()
+        .read_to_string()
         .map_err(|e| anyhow!("reading {view}: {e}"))?;
 
     let mut ids = BTreeSet::new();
     for chunk in extract_chunk_urls(&html, base_url.trim_end_matches('/')) {
         if let Ok(resp) = agent.get(&chunk).call() {
-            if let Ok(text) = resp.into_string() {
+            if let Ok(text) = resp.into_body().read_to_string() {
                 collect_hex40(&text, &mut ids);
             }
         }
@@ -376,7 +379,13 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
 
     let probe = action_body(id, "\u{0}__karkinos_probe__");
     for action in &ids {
-        if let Ok((_status, text)) = post_action(&agent, &view, base_url.trim_end_matches('/'), action, &probe) {
+        if let Ok((_status, text)) = post_action(
+            &agent,
+            &view,
+            base_url.trim_end_matches('/'),
+            action,
+            &probe,
+        ) {
             if let Some(v) = parse_action_result(&text) {
                 let err = v.get("error").and_then(Value::as_str).unwrap_or("");
                 if err.eq_ignore_ascii_case("Incorrect password")
@@ -395,10 +404,14 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
 }
 
 fn build_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        // Surface 4xx/5xx as Ok(response): post_action reads the body of error
+        // responses (a wrong password is a normal, body-carrying result here).
+        .http_status_as_error(false)
         .build()
+        .into()
 }
 
 /// A shared minimum-interval pacer (throttles the *total* request rate across all
@@ -410,7 +423,10 @@ struct Pace {
 
 impl Pace {
     fn new(interval: Duration) -> Self {
-        Self { interval, next: Mutex::new(Instant::now()) }
+        Self {
+            interval,
+            next: Mutex::new(Instant::now()),
+        }
     }
     fn wait(&self) {
         if self.interval.is_zero() {
@@ -480,15 +496,20 @@ impl Target for DeletoOnlineTarget {
         for _ in 0..=self.max_retries {
             self.pace.wait();
 
-            let (status, text) =
-                match post_action(&self.agent, &self.endpoint, &self.origin, &self.action_id, &body) {
-                    Ok(v) => v,
-                    Err(()) => {
-                        thread::sleep(backoff);
-                        backoff = (backoff * 2).min(self.retry_max);
-                        continue;
-                    }
-                };
+            let (status, text) = match post_action(
+                &self.agent,
+                &self.endpoint,
+                &self.origin,
+                &self.action_id,
+                &body,
+            ) {
+                Ok(v) => v,
+                Err(()) => {
+                    thread::sleep(backoff);
+                    backoff = (backoff * 2).min(self.retry_max);
+                    continue;
+                }
+            };
             if status == 429 {
                 thread::sleep(backoff);
                 backoff = (backoff * 2).min(self.retry_max);
@@ -594,10 +615,7 @@ mod tests {
             Some(Vec::new())
         );
         // Wrong salt → cannot strip → None (not an error).
-        assert_eq!(
-            recover_directly(&hash, b"different-salt").unwrap(),
-            None
-        );
+        assert_eq!(recover_directly(&hash, b"different-salt").unwrap(), None);
     }
 
     // ---- online target: pure helpers --------------------------------------
@@ -638,7 +656,10 @@ mod tests {
         let iv = [3u8; 12];
         let cipher = Aes256Gcm::new((&key).into());
         let ct = cipher
-            .encrypt(Nonce::from_slice(&iv), b"top secret".as_slice())
+            .encrypt(
+                &Nonce::try_from(iv.as_slice()).unwrap(),
+                b"top secret".as_slice(),
+            )
             .unwrap();
         let pt = decrypt_value(&key, &B64.encode(iv), &B64.encode(&ct)).unwrap();
         assert_eq!(pt, b"top secret");

@@ -90,7 +90,11 @@ impl SecretLocation {
     }
 
     fn secret_endpoint(&self) -> String {
-        format!("{}/secret/{}", self.base_url.trim_end_matches('/'), self.uuid)
+        format!(
+            "{}/secret/{}",
+            self.base_url.trim_end_matches('/'),
+            self.uuid
+        )
     }
 }
 
@@ -115,7 +119,7 @@ pub fn fetch_ciphertext(loc: &SecretLocation) -> Result<(String, bool)> {
         Ok(resp) => resp,
         // yopass returns 404 when a secret doesn't exist — almost always because
         // it was a one-time secret that's already been viewed, or it expired.
-        Err(ureq::Error::Status(404, _)) => {
+        Err(ureq::Error::StatusCode(404)) => {
             bail!(
                 "secret not found at {endpoint} — for a one-time link this means it \
                  was already viewed once or its TTL expired (the ciphertext is gone)"
@@ -123,9 +127,12 @@ pub fn fetch_ciphertext(loc: &SecretLocation) -> Result<(String, bool)> {
         }
         Err(e) => return Err(anyhow::Error::new(e).context(format!("GET {endpoint}"))),
     };
-    let secret: SecretResponse = resp
-        .into_json()
-        .context("decoding yopass /secret response as JSON")?;
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .context("reading yopass /secret response")?;
+    let secret: SecretResponse =
+        serde_json::from_str(&body).context("decoding yopass /secret response as JSON")?;
     let _ = secret.expiration;
     Ok((secret.message, secret.one_time))
 }
@@ -229,7 +236,9 @@ impl DecryptionHelper for Helper {
         decrypt: &mut dyn FnMut(Option<SymmetricAlgorithm>, &SessionKey) -> bool,
     ) -> sequoia_openpgp::Result<Option<Cert>> {
         if skesks.is_empty() {
-            return Err(anyhow!("no symmetric-key packet (not a passphrase-encrypted message)"));
+            return Err(anyhow!(
+                "no symmetric-key packet (not a passphrase-encrypted message)"
+            ));
         }
         for skesk in skesks {
             if let Ok((algo, sk)) = skesk.decrypt(&self.password) {
@@ -240,7 +249,9 @@ impl DecryptionHelper for Helper {
                 }
             }
         }
-        Err(anyhow!("passphrase did not decrypt any symmetric-key packet"))
+        Err(anyhow!(
+            "passphrase did not decrypt any symmetric-key packet"
+        ))
     }
 }
 
@@ -260,9 +271,10 @@ mod tests {
 
     #[test]
     fn parse_custom_password_url() {
-        let loc =
-            SecretLocation::from_share_url("https://yopass.se/#/c/2a8e0e1c-1111-2222-3333-444455556666")
-                .unwrap();
+        let loc = SecretLocation::from_share_url(
+            "https://yopass.se/#/c/2a8e0e1c-1111-2222-3333-444455556666",
+        )
+        .unwrap();
         assert_eq!(loc.base_url, "https://yopass.se");
         assert_eq!(loc.uuid, "2a8e0e1c-1111-2222-3333-444455556666");
         assert!(loc.key.is_none());
@@ -274,10 +286,9 @@ mod tests {
 
     #[test]
     fn parse_inurl_key() {
-        let loc = SecretLocation::from_share_url(
-            "https://my.host:8443/#/s/abcd-uuid/SuperSecretKey123",
-        )
-        .unwrap();
+        let loc =
+            SecretLocation::from_share_url("https://my.host:8443/#/s/abcd-uuid/SuperSecretKey123")
+                .unwrap();
         assert_eq!(loc.base_url, "https://my.host:8443");
         assert_eq!(loc.uuid, "abcd-uuid");
         assert_eq!(loc.key.as_deref(), Some("SuperSecretKey123"));

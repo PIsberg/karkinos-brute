@@ -66,8 +66,10 @@ pub fn run(
 
     let stop = Arc::new(AtomicBool::new(false));
     let tried = Arc::new(AtomicU64::new(0));
-    // Holds the first hit found. Mutex is contended only once (on success).
-    let hit: Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>> = Arc::new(Mutex::new(None));
+    // Holds the first hit found: (candidate, recovered plaintext). Mutex is
+    // contended only once (on success).
+    type Hit = (Vec<u8>, Vec<u8>);
+    let hit: Arc<Mutex<Option<Hit>>> = Arc::new(Mutex::new(None));
     // The first fatal worker error, if any.
     let worker_err: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
 
@@ -135,7 +137,9 @@ pub fn run(
     // otherwise allocate (only happens while the pipeline first fills). Dropping
     // `tx` afterwards unblocks the workers' recv.
     while !stop.load(Ordering::Relaxed) {
-        let mut buf = free_rx.try_recv().unwrap_or_else(|_| Vec::with_capacity(64));
+        let mut buf = free_rx
+            .try_recv()
+            .unwrap_or_else(|_| Vec::with_capacity(64));
         if !source.next_candidate(&mut buf) {
             break; // exhausted
         }
@@ -186,9 +190,7 @@ fn make_progress(enabled: bool, total: Option<u64>) -> Option<ProgressBar> {
         }
         None => {
             let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::with_template("{spinner} {pos} tried {per_sec}").unwrap(),
-            );
+            pb.set_style(ProgressStyle::with_template("{spinner} {pos} tried {per_sec}").unwrap());
             pb
         }
     };
@@ -229,7 +231,11 @@ mod tests {
     }
     impl MockTarget {
         fn new() -> Self {
-            Self { win: None, err_on: None, seen: AtomicUsize::new(0) }
+            Self {
+                win: None,
+                err_on: None,
+                seen: AtomicUsize::new(0),
+            }
         }
         fn wins_on(mut self, c: &[u8]) -> Self {
             self.win = Some(c.to_vec());
@@ -260,7 +266,10 @@ mod tests {
     }
 
     fn cfg(threads: usize) -> RunConfig {
-        RunConfig { threads, progress: false }
+        RunConfig {
+            threads,
+            progress: false,
+        }
     }
 
     #[test]
@@ -295,7 +304,11 @@ mod tests {
         let src = source(&words);
         let outcome = run(Arc::clone(&target) as Arc<dyn Target>, src, cfg(1)).unwrap();
         assert!(matches!(outcome, Outcome::Found { .. }));
-        assert_eq!(target.seen(), 1, "should stop after the first (winning) attempt");
+        assert_eq!(
+            target.seen(),
+            1,
+            "should stop after the first (winning) attempt"
+        );
     }
 
     #[test]

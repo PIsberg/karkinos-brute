@@ -58,14 +58,22 @@ fn main() -> anyhow::Result<()> {
     println!(
         "checked {} candidates against CPU reference: {}",
         batch.len(),
-        if mismatches == 0 { "ALL MATCH" } else { "FAILED" }
+        if mismatches == 0 {
+            "ALL MATCH"
+        } else {
+            "FAILED"
+        }
     );
 
     if let Some(slot) = known_slot {
         let verified = skesk.verify_with_s2k(&gpu_keys[slot]).is_some();
         println!(
             "known passphrase via GPU-derived key: {}",
-            if verified { "VERIFIED" } else { "rejected (BUG)" }
+            if verified {
+                "VERIFIED"
+            } else {
+                "rejected (BUG)"
+            }
         );
     }
 

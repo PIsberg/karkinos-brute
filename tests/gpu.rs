@@ -87,8 +87,8 @@ fn gpu_crack_finds_known_passphrase() {
         PASS.to_vec(),
         b"baz".to_vec(),
     ];
-    let found = crack_v6(&s, Box::new(VecSource(words.into_iter())), 1024, false)
-        .expect("crack_v6 ok");
+    let found =
+        crack_v6(&s, Box::new(VecSource(words.into_iter())), 1024, false).expect("crack_v6 ok");
     assert_eq!(found.as_deref(), Some(PASS));
 }
 
@@ -99,7 +99,7 @@ fn gpu_crack_exhausts_without_match() {
         return;
     }
     let words = vec![b"nope-1".to_vec(), b"nope-2".to_vec(), b"nope-3".to_vec()];
-    let found = crack_v6(&s, Box::new(VecSource(words.into_iter())), 1024, false)
-        .expect("crack_v6 ok");
+    let found =
+        crack_v6(&s, Box::new(VecSource(words.into_iter())), 1024, false).expect("crack_v6 ok");
     assert!(found.is_none(), "no candidate should match");
 }

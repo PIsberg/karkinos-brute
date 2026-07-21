@@ -204,7 +204,11 @@ mod tests {
     /// Write `contents` to a uniquely-named temp file and return its path.
     fn temp_wordlist(tag: &str, contents: &[u8]) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("karkinos_brute_wl_{}_{}.txt", std::process::id(), tag));
+        path.push(format!(
+            "karkinos_brute_wl_{}_{}.txt",
+            std::process::id(),
+            tag
+        ));
         std::fs::write(&path, contents).unwrap();
         path
     }

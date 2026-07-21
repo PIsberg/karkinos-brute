@@ -25,7 +25,10 @@ fn hash_password(password: &[u8], salt: &[u8]) -> String {
 }
 
 fn quiet() -> RunConfig {
-    RunConfig { threads: 2, progress: false }
+    RunConfig {
+        threads: 2,
+        progress: false,
+    }
 }
 
 #[test]
@@ -67,5 +70,8 @@ fn exhausts_when_password_outside_keyspace() {
     // Digits only never produces "zz": the run must exhaust cleanly (every wrong
     // guess is Ok(None)), not error out.
     let source = Box::new(MaskSpec::new("0123456789", 1, 2).unwrap());
-    assert!(matches!(run(target, source, quiet()).unwrap(), Outcome::Exhausted));
+    assert!(matches!(
+        run(target, source, quiet()).unwrap(),
+        Outcome::Exhausted
+    ));
 }

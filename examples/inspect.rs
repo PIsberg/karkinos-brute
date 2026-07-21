@@ -38,7 +38,10 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(pass) = args.get(2) {
                 match s.verify(pass.as_bytes()) {
-                    Some(sk) => println!("  fast-path VERIFIED, session_key={}", hex(&sk[..8.min(sk.len())])),
+                    Some(sk) => println!(
+                        "  fast-path VERIFIED, session_key={}",
+                        hex(&sk[..8.min(sk.len())])
+                    ),
                     None => println!("  fast-path rejected passphrase"),
                 }
             }

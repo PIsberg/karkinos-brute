@@ -121,7 +121,9 @@ impl OnetimesecretTarget {
                 // OTS instance used.
                 let parsed = PasswordHash::new(&self.hash)
                     .map_err(|e| anyhow!("invalid Argon2 PHC hash: {e}"))?;
-                Argon2::default().verify_password(candidate, &parsed).is_ok()
+                Argon2::default()
+                    .verify_password(candidate, &parsed)
+                    .is_ok()
             }
             Scheme::Bcrypt => {
                 // bcrypt's API takes the password as &str; a non-UTF-8 candidate
@@ -203,10 +205,7 @@ mod tests {
         let params = argon2::Params::new(32, 1, 1, None).unwrap();
         let a2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
         let salt = SaltString::from_b64("c2FsdHNhbHRzYWx0").unwrap();
-        let hash = a2
-            .hash_password(b"hunter2", &salt)
-            .unwrap()
-            .to_string();
+        let hash = a2.hash_password(b"hunter2", &salt).unwrap().to_string();
 
         let target = OnetimesecretTarget::from_hash(&hash).unwrap();
         assert_eq!(target.scheme(), Scheme::Argon2);

@@ -82,18 +82,21 @@ impl GpuS2k {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            ..Default::default()
         }))
         .context("no GPU adapter found")?;
-        let adapter_name = format!("{:?} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+        let adapter_name = format!(
+            "{:?} ({:?})",
+            adapter.get_info().name,
+            adapter.get_info().backend
+        );
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("s2k-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("s2k-device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
         .context("failed to create GPU device")?;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -114,15 +117,16 @@ impl GpuS2k {
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("s2k-pl"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("s2k-pipeline"),
             layout: Some(&pl),
             module: &module,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
+            cache: None,
         });
 
         // Precompute SHA-256 padding geometry for this SKESK's count.
@@ -223,9 +227,9 @@ impl GpuS2k {
             let len = c.len().min(MAX_PW_LEN);
             lens[ci] = len as u32;
             let base = ci * MAX_WORDS;
-            for j in 0..len {
+            for (j, &byte) in c.iter().enumerate().take(len) {
                 let wi = base + (j >> 2);
-                pw[wi] |= (c[j] as u32) << ((3 - (j & 3)) * 8);
+                pw[wi] |= (byte as u32) << ((3 - (j & 3)) * 8);
             }
         }
 
@@ -271,7 +275,9 @@ impl GpuS2k {
 
             let mut enc = self
                 .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("s2k-enc") });
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("s2k-enc"),
+                });
             {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("s2k-pass"),
@@ -286,14 +292,18 @@ impl GpuS2k {
             // activity > ~2s trips TDR even when individual dispatches are
             // short) and lets the persisted state flow chunk-to-chunk.
             self.queue.submit(Some(enc.finish()));
-            self.device.poll(wgpu::Maintain::Wait);
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| anyhow::anyhow!("GPU poll failed: {e:?}"))?;
             start = end;
         }
 
         let copy_bytes = (n * 32) as u64;
         let mut enc = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("s2k-copy") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("s2k-copy"),
+            });
         enc.copy_buffer_to_buffer(&self.out_buf, 0, &self.staging, 0, copy_bytes);
         self.queue.submit(Some(enc.finish()));
 
@@ -303,16 +313,23 @@ impl GpuS2k {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv().context("GPU map channel closed")?.context("GPU buffer map failed")?;
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| anyhow::anyhow!("GPU poll failed: {e:?}"))?;
+        rx.recv()
+            .context("GPU map channel closed")?
+            .context("GPU buffer map failed")?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| anyhow::anyhow!("GPU buffer range map failed: {e:?}"))?;
         let mut out = Vec::with_capacity(n);
         for ci in 0..n {
             let mut key = [0u8; 32];
             for wi in 0..8 {
                 let off = ci * 32 + wi * 4;
-                let word = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+                let word =
+                    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
                 key[wi * 4..wi * 4 + 4].copy_from_slice(&word.to_be_bytes());
             }
             out.push(key);

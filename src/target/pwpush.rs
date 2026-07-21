@@ -151,7 +151,10 @@ struct Pace {
 
 impl Pace {
     fn new(interval: Duration) -> Self {
-        Self { interval, next: Mutex::new(Instant::now()) }
+        Self {
+            interval,
+            next: Mutex::new(Instant::now()),
+        }
     }
 
     /// Block until the next request is allowed, then reserve the following slot.
@@ -186,10 +189,14 @@ impl PwpushTarget {
     /// between requests (use `Duration::ZERO` for localhost; be polite to shared
     /// servers).
     pub fn new(loc: &PushLocation, delay: Duration) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build();
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_global(Some(Duration::from_secs(30)))
+            // Return 4xx/5xx as Ok(response) so we can classify the status code
+            // (401 miss vs 200 hit vs 429 rate-limit) instead of an error variant.
+            .http_status_as_error(false)
+            .build()
+            .into();
         Self {
             endpoint: loc.endpoint(),
             agent,
@@ -203,8 +210,11 @@ impl PwpushTarget {
 }
 
 /// Parse a `Retry-After: <seconds>` header into a duration, if present.
-fn retry_after(resp: &ureq::Response) -> Option<Duration> {
-    resp.header("Retry-After")?
+fn retry_after(resp: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    resp.headers()
+        .get("Retry-After")?
+        .to_str()
+        .ok()?
         .trim()
         .parse::<u64>()
         .ok()
@@ -225,28 +235,31 @@ impl Target for PwpushTarget {
         for _ in 0..=self.max_retries {
             self.pace.wait();
 
-            let (code, resp) = match self
+            let mut resp = match self
                 .agent
                 .get(&self.endpoint)
                 .query("passphrase", pw)
                 .call()
             {
-                Ok(r) => (r.status(), Some(r)),
-                Err(ureq::Error::Status(c, r)) => (c, Some(r)),
-                Err(ureq::Error::Transport(_)) => {
-                    // Connection-level error (server starting up, network blip):
-                    // back off and retry rather than abort the whole run.
+                Ok(r) => r,
+                // Connection-level error (server starting up, network blip):
+                // back off and retry rather than abort the whole run.
+                Err(ureq::Error::Timeout(_))
+                | Err(ureq::Error::Io(_))
+                | Err(ureq::Error::ConnectionFailed) => {
                     thread::sleep(backoff);
                     backoff = (backoff * 2).min(self.retry_max);
                     continue;
                 }
+                Err(e) => bail!("PasswordPusher request failed: {e}"),
             };
+            let code = resp.status().as_u16();
 
             match classify_status(code) {
                 Disposition::Hit => {
                     let body = resp
-                        .expect("Hit implies a response")
-                        .into_string()
+                        .body_mut()
+                        .read_to_string()
                         .context("reading PasswordPusher response body")?;
                     return match extract_payload(&body) {
                         Some(p) => Ok(Some(p)),
@@ -263,11 +276,11 @@ impl Target for PwpushTarget {
                     "push not found or expired (HTTP {code}); nothing to crack \
                      (re-create the push, or check the token/server)"
                 ),
-                Disposition::Fatal => bail!(
-                    "unexpected HTTP {code} from PasswordPusher (not a passphrase result)"
-                ),
+                Disposition::Fatal => {
+                    bail!("unexpected HTTP {code} from PasswordPusher (not a passphrase result)")
+                }
                 Disposition::RateLimited => {
-                    let wait = resp.as_ref().and_then(retry_after).unwrap_or(backoff);
+                    let wait = retry_after(&resp).unwrap_or(backoff);
                     thread::sleep(wait);
                     backoff = (backoff * 2).min(self.retry_max);
                     continue;

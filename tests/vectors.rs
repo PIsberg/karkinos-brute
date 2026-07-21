@@ -36,7 +36,10 @@ fn v6_parses() {
 #[test]
 fn v6_fast_path_verifies_correct_passphrase() {
     let s = SkeskV6::parse(YOPASS_V6_GCM.as_bytes()).unwrap();
-    assert!(s.verify(YOPASS_V6_PASS).is_some(), "correct passphrase must verify");
+    assert!(
+        s.verify(YOPASS_V6_PASS).is_some(),
+        "correct passphrase must verify"
+    );
 }
 
 #[test]
@@ -67,7 +70,9 @@ fn v4_is_not_on_the_fast_path() {
     let err = SkeskV6::parse(OPENPGP_V4.as_bytes()).unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("version")
-            || err.downcast_ref::<bruteforcer::target::skesk_v6::UnsupportedSkesk>().is_some(),
+            || err
+                .downcast_ref::<bruteforcer::target::skesk_v6::UnsupportedSkesk>()
+                .is_some(),
         "expected an unsupported-version error, got: {err}"
     );
 }

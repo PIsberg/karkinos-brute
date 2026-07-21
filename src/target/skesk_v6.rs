@@ -9,6 +9,7 @@
 //!      the cipher key length.
 //!   3. AEAD-open the packet's encrypted session key with `kek`, nonce = IV,
 //!      additional data = `aad = [0xC3, version, cipher_algo, aead_algo]`.
+//!
 //!   A correct passphrase makes the AEAD tag verify; a wrong one fails it.
 //!
 //! Only the combination current yopass uses is handled here: **AES-256 + GCM**.
@@ -161,10 +162,10 @@ impl SkeskV6 {
         hk.expand(&self.aad, &mut kek).ok()?;
 
         let cipher = Aes256Gcm::new((&kek).into());
-        let nonce = Nonce::from_slice(&self.iv);
+        let nonce = Nonce::try_from(self.iv.as_slice()).ok()?;
         cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: &self.esk,
                     aad: &self.aad,
@@ -242,7 +243,9 @@ fn parse_packet_header(buf: &[u8], i: usize) -> Result<(u8, usize, usize, usize)
         let (len, hdr) = if l0 < 192 {
             (l0 as usize, 1)
         } else if l0 < 224 {
-            let l1 = *buf.get(p + 1).ok_or_else(|| anyhow::anyhow!("truncated length"))?;
+            let l1 = *buf
+                .get(p + 1)
+                .ok_or_else(|| anyhow::anyhow!("truncated length"))?;
             ((((l0 as usize - 192) << 8) + l1 as usize + 192), 2)
         } else if l0 == 255 {
             let b = buf
@@ -260,7 +263,10 @@ fn parse_packet_header(buf: &[u8], i: usize) -> Result<(u8, usize, usize, usize)
         let lt = o & 0x03;
         let p = i + 1;
         let (len, hdr) = match lt {
-            0 => (*buf.get(p).ok_or_else(|| anyhow::anyhow!("trunc"))? as usize, 1),
+            0 => (
+                *buf.get(p).ok_or_else(|| anyhow::anyhow!("trunc"))? as usize,
+                1,
+            ),
             1 => {
                 let b = buf.get(p..p + 2).ok_or_else(|| anyhow::anyhow!("trunc"))?;
                 (u16::from_be_bytes([b[0], b[1]]) as usize, 2)

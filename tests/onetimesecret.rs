@@ -18,11 +18,13 @@ use bruteforcer::target::onetimesecret::{OnetimesecretTarget, Scheme};
 use bruteforcer::target::Target;
 
 // OpenBSD bcrypt test vector: passphrase "U*U" under cost 5.
-const OPENBSD_BCRYPT_HASH: &str =
-    "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW";
+const OPENBSD_BCRYPT_HASH: &str = "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW";
 
 fn quiet() -> RunConfig {
-    RunConfig { threads: 2, progress: false }
+    RunConfig {
+        threads: 2,
+        progress: false,
+    }
 }
 
 #[test]
@@ -72,5 +74,8 @@ fn exhausts_when_passphrase_outside_keyspace() {
     // Digits only never produces "U*U": the run must exhaust cleanly (every wrong
     // guess is Ok(None)), not error out.
     let source = Box::new(MaskSpec::new("0123456789", 1, 2).unwrap());
-    assert!(matches!(run(target, source, quiet()).unwrap(), Outcome::Exhausted));
+    assert!(matches!(
+        run(target, source, quiet()).unwrap(),
+        Outcome::Exhausted
+    ));
 }
