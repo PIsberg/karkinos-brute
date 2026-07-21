@@ -242,7 +242,9 @@ fn parse_packet_header(buf: &[u8], i: usize) -> Result<(u8, usize, usize, usize)
         let (len, hdr) = if l0 < 192 {
             (l0 as usize, 1)
         } else if l0 < 224 {
-            let l1 = *buf.get(p + 1).ok_or_else(|| anyhow::anyhow!("truncated length"))?;
+            let l1 = *buf
+                .get(p + 1)
+                .ok_or_else(|| anyhow::anyhow!("truncated length"))?;
             ((((l0 as usize - 192) << 8) + l1 as usize + 192), 2)
         } else if l0 == 255 {
             let b = buf
@@ -260,7 +262,10 @@ fn parse_packet_header(buf: &[u8], i: usize) -> Result<(u8, usize, usize, usize)
         let lt = o & 0x03;
         let p = i + 1;
         let (len, hdr) = match lt {
-            0 => (*buf.get(p).ok_or_else(|| anyhow::anyhow!("trunc"))? as usize, 1),
+            0 => (
+                *buf.get(p).ok_or_else(|| anyhow::anyhow!("trunc"))? as usize,
+                1,
+            ),
             1 => {
                 let b = buf.get(p..p + 2).ok_or_else(|| anyhow::anyhow!("trunc"))?;
                 (u16::from_be_bytes([b[0], b[1]]) as usize, 2)

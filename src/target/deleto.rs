@@ -136,9 +136,7 @@ pub fn recover_directly(hash: &str, salt: &[u8]) -> Result<Option<Vec<u8>>> {
     let decoded = B64
         .decode(hash.trim().as_bytes())
         .map_err(|e| anyhow!("passwordHash is not valid base64: {e}"))?;
-    Ok(decoded
-        .strip_suffix(salt)
-        .map(|password| password.to_vec()))
+    Ok(decoded.strip_suffix(salt).map(|password| password.to_vec()))
 }
 
 // ----------------------------------------------------------------------------
@@ -381,7 +379,13 @@ pub fn discover_get_secure_share_action(base_url: &str, id: &str) -> Result<Stri
 
     let probe = action_body(id, "\u{0}__karkinos_probe__");
     for action in &ids {
-        if let Ok((_status, text)) = post_action(&agent, &view, base_url.trim_end_matches('/'), action, &probe) {
+        if let Ok((_status, text)) = post_action(
+            &agent,
+            &view,
+            base_url.trim_end_matches('/'),
+            action,
+            &probe,
+        ) {
             if let Some(v) = parse_action_result(&text) {
                 let err = v.get("error").and_then(Value::as_str).unwrap_or("");
                 if err.eq_ignore_ascii_case("Incorrect password")
@@ -419,7 +423,10 @@ struct Pace {
 
 impl Pace {
     fn new(interval: Duration) -> Self {
-        Self { interval, next: Mutex::new(Instant::now()) }
+        Self {
+            interval,
+            next: Mutex::new(Instant::now()),
+        }
     }
     fn wait(&self) {
         if self.interval.is_zero() {
@@ -489,15 +496,20 @@ impl Target for DeletoOnlineTarget {
         for _ in 0..=self.max_retries {
             self.pace.wait();
 
-            let (status, text) =
-                match post_action(&self.agent, &self.endpoint, &self.origin, &self.action_id, &body) {
-                    Ok(v) => v,
-                    Err(()) => {
-                        thread::sleep(backoff);
-                        backoff = (backoff * 2).min(self.retry_max);
-                        continue;
-                    }
-                };
+            let (status, text) = match post_action(
+                &self.agent,
+                &self.endpoint,
+                &self.origin,
+                &self.action_id,
+                &body,
+            ) {
+                Ok(v) => v,
+                Err(()) => {
+                    thread::sleep(backoff);
+                    backoff = (backoff * 2).min(self.retry_max);
+                    continue;
+                }
+            };
             if status == 429 {
                 thread::sleep(backoff);
                 backoff = (backoff * 2).min(self.retry_max);
@@ -603,10 +615,7 @@ mod tests {
             Some(Vec::new())
         );
         // Wrong salt → cannot strip → None (not an error).
-        assert_eq!(
-            recover_directly(&hash, b"different-salt").unwrap(),
-            None
-        );
+        assert_eq!(recover_directly(&hash, b"different-salt").unwrap(), None);
     }
 
     // ---- online target: pure helpers --------------------------------------
@@ -647,7 +656,10 @@ mod tests {
         let iv = [3u8; 12];
         let cipher = Aes256Gcm::new((&key).into());
         let ct = cipher
-            .encrypt(&Nonce::try_from(iv.as_slice()).unwrap(), b"top secret".as_slice())
+            .encrypt(
+                &Nonce::try_from(iv.as_slice()).unwrap(),
+                b"top secret".as_slice(),
+            )
             .unwrap();
         let pt = decrypt_value(&key, &B64.encode(iv), &B64.encode(&ct)).unwrap();
         assert_eq!(pt, b"top secret");

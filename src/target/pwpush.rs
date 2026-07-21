@@ -151,7 +151,10 @@ struct Pace {
 
 impl Pace {
     fn new(interval: Duration) -> Self {
-        Self { interval, next: Mutex::new(Instant::now()) }
+        Self {
+            interval,
+            next: Mutex::new(Instant::now()),
+        }
     }
 
     /// Block until the next request is allowed, then reserve the following slot.
@@ -273,9 +276,9 @@ impl Target for PwpushTarget {
                     "push not found or expired (HTTP {code}); nothing to crack \
                      (re-create the push, or check the token/server)"
                 ),
-                Disposition::Fatal => bail!(
-                    "unexpected HTTP {code} from PasswordPusher (not a passphrase result)"
-                ),
+                Disposition::Fatal => {
+                    bail!("unexpected HTTP {code} from PasswordPusher (not a passphrase result)")
+                }
                 Disposition::RateLimited => {
                     let wait = retry_after(&resp).unwrap_or(backoff);
                     thread::sleep(wait);

@@ -39,7 +39,10 @@ fn run_cfg() -> RunConfig {
         .map(|n| n.get())
         .unwrap_or(1);
     // Progress bar off: we're measuring dispatch, not rendering, and CI has no TTY.
-    RunConfig { threads, progress: false }
+    RunConfig {
+        threads,
+        progress: false,
+    }
 }
 
 /// Emits `total` distinct candidates: the lower-case decimal of each index,
@@ -103,7 +106,10 @@ struct CountingTarget {
 
 impl CountingTarget {
     fn new() -> Self {
-        Self { seen: AtomicUsize::new(0), win: None }
+        Self {
+            seen: AtomicUsize::new(0),
+            win: None,
+        }
     }
     fn wins_on(mut self, candidate: Vec<u8>) -> Self {
         self.win = Some(candidate);
@@ -138,8 +144,15 @@ fn engine_exhausts_full_keyspace() {
 
     let outcome = run(Arc::clone(&target) as Arc<dyn Target>, source, run_cfg()).unwrap();
 
-    assert!(matches!(outcome, Outcome::Exhausted), "no winner ⇒ exhausted");
-    assert_eq!(target.seen() as u64, n, "every candidate tried exactly once");
+    assert!(
+        matches!(outcome, Outcome::Exhausted),
+        "no winner ⇒ exhausted"
+    );
+    assert_eq!(
+        target.seen() as u64,
+        n,
+        "every candidate tried exactly once"
+    );
 }
 
 /// Plant a winner halfway through the stream and confirm the engine finds it
@@ -177,8 +190,15 @@ fn mask_streams_huge_keyspace_in_o1_memory() {
 
     let outcome = run(Arc::clone(&target) as Arc<dyn Target>, source, run_cfg()).unwrap();
 
-    assert!(matches!(outcome, Outcome::Exhausted), "no winner in this slice");
-    assert_eq!(target.seen() as u64, n, "exactly the bounded slice was tried");
+    assert!(
+        matches!(outcome, Outcome::Exhausted),
+        "no winner in this slice"
+    );
+    assert_eq!(
+        target.seen() as u64,
+        n,
+        "exactly the bounded slice was tried"
+    );
 }
 
 /// Wraps a [`CandidateSource`], yielding at most `limit` candidates. Keeps the
@@ -190,7 +210,10 @@ struct Take {
 
 impl Take {
     fn new(inner: impl CandidateSource + 'static, limit: u64) -> Self {
-        Self { inner: Box::new(inner), remaining: limit }
+        Self {
+            inner: Box::new(inner),
+            remaining: limit,
+        }
     }
 }
 

@@ -28,11 +28,11 @@
 
 use std::io::Read;
 
-use aes_gcm::Nonce;
+use aes_gcm::aead::consts::U16;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::aes::Aes256;
-use aes_gcm::aead::consts::U16;
 use aes_gcm::AesGcm;
+use aes_gcm::Nonce;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -163,10 +163,7 @@ pub fn fetch_paste(loc: &PasteLocation) -> Result<(Vec<u8>, bool)> {
             "server did not return a paste (status {}{}). For a burn-after-reading \
              link this means it was already viewed or expired.",
             parsed.status,
-            parsed
-                .message
-                .map(|m| format!(": {m}"))
-                .unwrap_or_default()
+            parsed.message.map(|m| format!(": {m}")).unwrap_or_default()
         );
     }
     let burn = adata_burn_after_reading(&parsed.adata);
@@ -208,8 +205,8 @@ impl PrivatebinTarget {
     /// Build from a paste JSON document (as returned by the API or saved to disk)
     /// and the base58-decoded paste key.
     pub fn from_paste_json(paste_json: &[u8], key: Vec<u8>) -> Result<Self> {
-        let doc: Value = serde_json::from_slice(paste_json)
-            .context("parsing PrivateBin paste JSON")?;
+        let doc: Value =
+            serde_json::from_slice(paste_json).context("parsing PrivateBin paste JSON")?;
 
         let ct_b64 = doc
             .get("ct")
@@ -237,17 +234,27 @@ impl PrivatebinTarget {
         }
 
         let iv = B64
-            .decode(spec[0].as_str().ok_or_else(|| anyhow!("spec iv not a string"))?)
+            .decode(
+                spec[0]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("spec iv not a string"))?,
+            )
             .context("base64-decoding IV")?;
         let salt = B64
-            .decode(spec[1].as_str().ok_or_else(|| anyhow!("spec salt not a string"))?)
+            .decode(
+                spec[1]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("spec salt not a string"))?,
+            )
             .context("base64-decoding salt")?;
         let iterations: u32 = spec[2]
             .as_u64()
-            .ok_or_else(|| anyhow!("spec iterations not an integer"))? as u32;
+            .ok_or_else(|| anyhow!("spec iterations not an integer"))?
+            as u32;
         let keysize: usize = spec[3]
             .as_u64()
-            .ok_or_else(|| anyhow!("spec keysize not an integer"))? as usize;
+            .ok_or_else(|| anyhow!("spec keysize not an integer"))?
+            as usize;
         let tagbits: u64 = spec[4].as_u64().unwrap_or(0);
         let cipher = spec[5].as_str().unwrap_or("");
         let mode = spec[6].as_str().unwrap_or("");
@@ -291,13 +298,24 @@ impl PrivatebinTarget {
         kdf_input.extend_from_slice(password);
 
         let mut derived = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(&kdf_input, &self.salt, self.iterations, &mut derived[..self.keylen]);
+        pbkdf2_hmac::<Sha256>(
+            &kdf_input,
+            &self.salt,
+            self.iterations,
+            &mut derived[..self.keylen],
+        );
 
         let cipher = Aes256Gcm16::new_from_slice(&derived[..self.keylen])
             .map_err(|_| anyhow!("derived key length invalid"))?;
         let nonce = Nonce::<U16>::try_from(self.iv.as_slice())
             .map_err(|_| anyhow!("IV must be 16 bytes, got {}", self.iv.len()))?;
-        match cipher.decrypt(&nonce, Payload { msg: &self.ct, aad: &self.aad }) {
+        match cipher.decrypt(
+            &nonce,
+            Payload {
+                msg: &self.ct,
+                aad: &self.aad,
+            },
+        ) {
             // Tag verified ⇒ correct password. Decompress for the readable secret.
             Ok(plain) => Ok(Some(decompress(&plain, &self.compression))),
             // Tag mismatch ⇒ wrong password. The common case.

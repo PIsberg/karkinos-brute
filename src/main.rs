@@ -14,19 +14,24 @@ use clap::{ArgGroup, Args, Parser, Subcommand};
 
 use bruteforcer::engine::candidate::{named_charset, CandidateSource, MaskSpec, WordlistSource};
 use bruteforcer::engine::runner::{run, Outcome, RunConfig};
+use bruteforcer::target::deleto::{
+    discover_get_secure_share_action, DeletoLocation, DeletoOnlineTarget, DeletoTarget,
+    DEFAULT_SALT,
+};
+use bruteforcer::target::onetimesecret::OnetimesecretTarget;
 use bruteforcer::target::privatebin::{
     decode_paste_key, fetch_paste, PasteLocation, PrivatebinTarget,
 };
-use bruteforcer::target::deleto::{
-    discover_get_secure_share_action, DeletoLocation, DeletoOnlineTarget, DeletoTarget, DEFAULT_SALT,
-};
-use bruteforcer::target::onetimesecret::OnetimesecretTarget;
 use bruteforcer::target::pwpush::{PushLocation, PwpushTarget};
 use bruteforcer::target::yopass::{fetch_ciphertext, SecretLocation, YopassTarget};
 use bruteforcer::target::Target;
 
 #[derive(Parser)]
-#[command(name = "bruteforcer", version, about = "Pluggable bruteforce framework (authorized use only)")]
+#[command(
+    name = "bruteforcer",
+    version,
+    about = "Pluggable bruteforce framework (authorized use only)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -381,9 +386,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Yopass { action } => match action {
-            YopassAction::Fetch { source, out } => {
-                yopass_fetch(source, out)
-            }
+            YopassAction::Fetch { source, out } => yopass_fetch(source, out),
             YopassAction::Crack {
                 source,
                 candidates,
@@ -392,7 +395,15 @@ fn main() -> Result<()> {
                 gpu,
                 gpu_batch,
                 out,
-            } => yopass_crack(source, candidates, threads, no_progress, gpu, gpu_batch, out),
+            } => yopass_crack(
+                source,
+                candidates,
+                threads,
+                no_progress,
+                gpu,
+                gpu_batch,
+                out,
+            ),
         },
         Command::Privatebin { action } => match action {
             PrivatebinAction::Fetch { url, out } => privatebin_fetch(url, out),
@@ -440,7 +451,15 @@ fn main() -> Result<()> {
                 delay_ms,
                 no_progress,
                 out,
-            } => deleto_online(source, candidates, action_id, threads, delay_ms, no_progress, out),
+            } => deleto_online(
+                source,
+                candidates,
+                action_id,
+                threads,
+                delay_ms,
+                no_progress,
+                out,
+            ),
         },
     }
 }
@@ -496,7 +515,9 @@ fn yopass_fetch(source: SecretInput, out: Option<PathBuf>) -> Result<()> {
     );
     let (message, one_time) = fetch_ciphertext(&loc)?;
     if one_time {
-        eprintln!("⚠️  Server reported this secret as one-time: it is now consumed. Save this blob!");
+        eprintln!(
+            "⚠️  Server reported this secret as one-time: it is now consumed. Save this blob!"
+        );
     }
 
     match out {
@@ -543,7 +564,10 @@ fn yopass_crack(
         if let Some(result) = try_gpu_crack(&ciphertext, &candidates, gpu_batch, !no_progress)? {
             return match result {
                 Some(candidate) => {
-                    eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+                    eprintln!(
+                        "\n✅ Password found: {}",
+                        String::from_utf8_lossy(&candidate)
+                    );
                     // Recover the plaintext with the proven passphrase (one decrypt).
                     match target.try_candidate(&candidate)? {
                         Some(secret) => emit_secret(&secret, out),
@@ -629,7 +653,13 @@ fn obtain_ciphertext(source: &CrackInput) -> Result<(Vec<u8>, Option<String>)> {
 /// Keep a UUID safe to use as a filename (defensive; yopass ids are already tame).
 fn sanitize_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -715,7 +745,10 @@ fn privatebin_crack(
 
     match run(target, source_box, cfg)? {
         Outcome::Found { candidate, secret } => {
-            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            eprintln!(
+                "\n✅ Password found: {}",
+                String::from_utf8_lossy(&candidate)
+            );
             emit_secret(&secret, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no candidate matched"),
@@ -748,10 +781,9 @@ fn pb_obtain(source: &PbCrackInput) -> Result<(Vec<u8>, Vec<u8>)> {
     } else {
         bail!("provide --url, or --message + --key, or --id + --server + --key");
     };
-    let key = loc
-        .key
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("no paste key — pass it in the URL fragment or via --key"))?;
+    let key = loc.key.clone().ok_or_else(|| {
+        anyhow::anyhow!("no paste key — pass it in the URL fragment or via --key")
+    })?;
 
     eprintln!(
         "⚠️  Fetching paste {} — PrivateBin pastes may be burn-after-reading; this can DELETE it server-side.",
@@ -762,7 +794,9 @@ fn pb_obtain(source: &PbCrackInput) -> Result<(Vec<u8>, Vec<u8>)> {
     if let Err(e) = fs::write(&backup, &json) {
         eprintln!("⚠️  could not save a backup of the fetched paste: {e}");
     } else {
-        eprintln!("💾 Saved fetched paste to {backup} (re-crack with `--message {backup} --key <key>`).");
+        eprintln!(
+            "💾 Saved fetched paste to {backup} (re-crack with `--message {backup} --key <key>`)."
+        );
     }
     if burn {
         eprintln!("⚠️  This paste was burn-after-reading: it is now consumed.");
@@ -808,7 +842,10 @@ fn pwpush_crack(
 
     match run(target, source_box, cfg)? {
         Outcome::Found { candidate, secret } => {
-            eprintln!("\n✅ Passphrase found: {}", String::from_utf8_lossy(&candidate));
+            eprintln!(
+                "\n✅ Passphrase found: {}",
+                String::from_utf8_lossy(&candidate)
+            );
             emit_secret(&secret, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
@@ -855,7 +892,10 @@ fn onetimesecret_crack(
 
     match run(target, source_box, cfg)? {
         Outcome::Found { candidate, .. } => {
-            eprintln!("\n✅ Passphrase found: {}", String::from_utf8_lossy(&candidate));
+            eprintln!(
+                "\n✅ Passphrase found: {}",
+                String::from_utf8_lossy(&candidate)
+            );
             emit_secret(&candidate, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no passphrase matched"),
@@ -903,7 +943,10 @@ fn deleto_crack(
 
     match run(target, source_box, cfg)? {
         Outcome::Found { candidate, .. } => {
-            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            eprintln!(
+                "\n✅ Password found: {}",
+                String::from_utf8_lossy(&candidate)
+            );
             emit_secret(&candidate, out)
         }
         Outcome::Exhausted => bail!("keyspace exhausted; no password matched"),
@@ -930,7 +973,10 @@ fn deleto_online(
 
     eprintln!("⚠️  ONLINE ATTACK against a live dele.to share. dele.to gates the ciphertext");
     eprintln!("    behind a server-side password check, so every candidate is one HTTP request");
-    eprintln!("    to {}. Run this ONLY against an instance you", loc.view_endpoint());
+    eprintln!(
+        "    to {}. Run this ONLY against an instance you",
+        loc.view_endpoint()
+    );
     eprintln!("    are authorized to test (e.g. your own self-hosted Docker instance).");
     if loc.key.is_none() {
         eprintln!("ℹ️  No URL key provided: the password will be recovered, but the value cannot");
@@ -941,14 +987,20 @@ fn deleto_online(
     let action_id = match action_id {
         Some(a) => a,
         None => {
-            eprintln!("🔎 Discovering the getSecureShare server-action id from the client bundle...");
+            eprintln!(
+                "🔎 Discovering the getSecureShare server-action id from the client bundle..."
+            );
             let a = discover_get_secure_share_action(&loc.base_url, &loc.id)?;
             eprintln!("   using action id {a}");
             a
         }
     };
 
-    let target = Arc::new(DeletoOnlineTarget::new(&loc, action_id, Duration::from_millis(delay_ms)));
+    let target = Arc::new(DeletoOnlineTarget::new(
+        &loc,
+        action_id,
+        Duration::from_millis(delay_ms),
+    ));
     let source_box = build_candidate_source(&candidates)?;
     let cfg = RunConfig {
         threads: threads.max(1),
@@ -961,7 +1013,10 @@ fn deleto_online(
 
     match run(target, source_box, cfg)? {
         Outcome::Found { candidate, secret } => {
-            eprintln!("\n✅ Password found: {}", String::from_utf8_lossy(&candidate));
+            eprintln!(
+                "\n✅ Password found: {}",
+                String::from_utf8_lossy(&candidate)
+            );
             if loc.key.is_some() {
                 eprintln!("🔓 Decrypted the value with the URL key.");
             }

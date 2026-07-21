@@ -20,12 +20,16 @@ const FIXTURE: &str = include_str!("fixtures/privatebin_v2_gcm.json");
 /// expected password/plaintext from the `answer` block.
 fn target_and_answer() -> (PrivatebinTarget, String, Vec<u8>) {
     let doc: Value = serde_json::from_str(FIXTURE).expect("fixture is valid JSON");
-    let key = decode_paste_key(doc["answer"]["keyBase58"].as_str().unwrap())
-        .expect("base58 key decodes");
+    let key =
+        decode_paste_key(doc["answer"]["keyBase58"].as_str().unwrap()).expect("base58 key decodes");
     let paste = serde_json::to_vec(&doc["paste"]).unwrap();
     let target = PrivatebinTarget::from_paste_json(&paste, key).expect("paste parses");
     let password = doc["answer"]["password"].as_str().unwrap().to_string();
-    let plaintext = doc["answer"]["plaintext"].as_str().unwrap().as_bytes().to_vec();
+    let plaintext = doc["answer"]["plaintext"]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .to_vec();
     (target, password, plaintext)
 }
 
