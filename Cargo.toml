@@ -22,13 +22,13 @@ indicatif = "0.18"
 
 # Manual v6-SKESK verification path (also the foundation for the GPU backend):
 # S2K (SHA-256) -> HKDF-SHA256 -> AES-256-GCM unwrap of the session key.
-sha2 = "0.10"
-hkdf = "0.12"
-aes-gcm = "0.10"
+sha2 = "0.11"
+hkdf = "0.13"
+aes-gcm = "0.11"
 
 # PrivateBin target: PBKDF2-HMAC-SHA256 -> AES-256-GCM tag check, base58 URL
 # key, base64 wire fields, and (raw) DEFLATE for the recovered plaintext.
-pbkdf2 = "0.12"
+pbkdf2 = "0.13"
 base64 = "0.22"
 bs58 = "0.5"
 flate2 = "1"

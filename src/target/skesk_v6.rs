@@ -161,10 +161,10 @@ impl SkeskV6 {
         hk.expand(&self.aad, &mut kek).ok()?;
 
         let cipher = Aes256Gcm::new((&kek).into());
-        let nonce = Nonce::from_slice(&self.iv);
+        let nonce = Nonce::try_from(self.iv.as_slice()).ok()?;
         cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: &self.esk,
                     aad: &self.aad,

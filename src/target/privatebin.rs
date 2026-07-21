@@ -28,7 +28,7 @@
 
 use std::io::Read;
 
-use aes_gcm::aead::generic_array::GenericArray;
+use aes_gcm::Nonce;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::aes::Aes256;
 use aes_gcm::aead::consts::U16;
@@ -290,9 +290,11 @@ impl PrivatebinTarget {
         let mut derived = [0u8; 32];
         pbkdf2_hmac::<Sha256>(&kdf_input, &self.salt, self.iterations, &mut derived[..self.keylen]);
 
-        let cipher = Aes256Gcm16::new(GenericArray::from_slice(&derived[..self.keylen]));
-        let nonce = GenericArray::from_slice(&self.iv);
-        match cipher.decrypt(nonce, Payload { msg: &self.ct, aad: &self.aad }) {
+        let cipher = Aes256Gcm16::new_from_slice(&derived[..self.keylen])
+            .map_err(|_| anyhow!("derived key length invalid"))?;
+        let nonce = Nonce::<U16>::try_from(self.iv.as_slice())
+            .map_err(|_| anyhow!("IV must be 16 bytes, got {}", self.iv.len()))?;
+        match cipher.decrypt(&nonce, Payload { msg: &self.ct, aad: &self.aad }) {
             // Tag verified ⇒ correct password. Decompress for the readable secret.
             Ok(plain) => Ok(Some(decompress(&plain, &self.compression))),
             // Tag mismatch ⇒ wrong password. The common case.

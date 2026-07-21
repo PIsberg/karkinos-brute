@@ -248,9 +248,10 @@ pub fn decrypt_value(key: &[u8], iv_b64: &str, content_b64: &str) -> Result<Vec<
         .try_into()
         .map_err(|_| anyhow!("key must be 32 bytes, got {}", key.len()))?;
     let cipher = Aes256Gcm::new((&karr).into());
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = Nonce::try_from(iv.as_slice())
+        .map_err(|_| anyhow!("iv must be 12 bytes, got {}", iv.len()))?;
     cipher
-        .decrypt(nonce, ct.as_slice())
+        .decrypt(&nonce, ct.as_slice())
         .map_err(|_| anyhow!("AES-256-GCM decryption failed (wrong key or corrupt ciphertext)"))
 }
 
@@ -638,7 +639,7 @@ mod tests {
         let iv = [3u8; 12];
         let cipher = Aes256Gcm::new((&key).into());
         let ct = cipher
-            .encrypt(Nonce::from_slice(&iv), b"top secret".as_slice())
+            .encrypt(&Nonce::try_from(iv.as_slice()).unwrap(), b"top secret".as_slice())
             .unwrap();
         let pt = decrypt_value(&key, &B64.encode(iv), &B64.encode(&ct)).unwrap();
         assert_eq!(pt, b"top secret");
